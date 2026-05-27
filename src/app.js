@@ -30,6 +30,7 @@ app.use(cors({
     const allowed = [
       'https://web.telegram.org',
       'https://telegram.org',
+      'https://bingo-telegram-frontend.vercel.app',
       'null', // Telegram Mini App iframe
     ];
     if (!origin || allowed.some(a => origin.startsWith(a.replace('null', '')))) {
