@@ -103,12 +103,12 @@ bingoCardSchema.statics.releaseLock = async function (cardId, userId) {
  */
 bingoCardSchema.statics.confirmPurchase = async function (cardId, userId) {
   const now = new Date();
+  // Allow purchase even if lock expired, as long as this user was the locker
   return this.findOneAndUpdate(
     {
       _id: cardId,
       lockedBy: userId,
       status: CARD_STATUS.SELECTED,
-      lockExpiresAt: { $gt: now },
     },
     {
       $set: {
