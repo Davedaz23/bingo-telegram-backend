@@ -60,8 +60,8 @@ module.exports = {
     MIN_PLAYERS: parseInt(process.env.MIN_PLAYERS) || 2,
     MAX_PLAYERS: parseInt(process.env.MAX_PLAYERS) || 100,
     CARDS_PER_GAME: 400,
-    CARD_PRICE: parseFloat(process.env.CARD_PRICE) || 50,
-    PLATFORM_FEE_PERCENT: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 10,
+    CARD_PRICE: parseFloat(process.env.CARD_PRICE) || 10,
+    PLATFORM_FEE_PERCENT: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 20,
     NUMBER_DRAW_INTERVAL_MS: 5000,
     START_COUNTDOWN_SECONDS: 30,
     SELECTION_TIMEOUT_SECONDS: 120, // wait up to 2 min for 2nd player after first selection

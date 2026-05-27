@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Transaction = require('../models/Transaction');
 const { validateTelegramInitData } = require('../middleware/telegramAuth');
-const { ROLES } = require('../config/constants');
+const { ROLES, TRANSACTION_TYPE, TRANSACTION_STATUS } = require('../config/constants');
 const logger = require('../utils/logger');
 
 /**
@@ -29,8 +30,21 @@ exports.telegramLogin = async (req, res) => {
       lastName: telegramUser.last_name || null,
       languageCode: telegramUser.language_code || 'en',
       role,
+      balance: 50,
     });
-    logger.info(`New user via auth: ${telegramUser.id} (${role})`);
+
+    await Transaction.create({
+      userId: user._id,
+      telegramId: user.telegramId,
+      type: TRANSACTION_TYPE.DEPOSIT,
+      status: TRANSACTION_STATUS.COMPLETED,
+      amount: 50,
+      balanceBefore: 0,
+      balanceAfter: 50,
+      description: 'Welcome bonus: 50 Birr',
+    });
+
+    logger.info(`New user via auth: ${telegramUser.id} (${role}) — 50 Birr welcome bonus`);
   } else {
     if (!user.isActive) {
       return res.status(403).json({ success: false, message: 'Account suspended' });
