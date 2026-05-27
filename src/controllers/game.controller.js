@@ -49,10 +49,7 @@ exports.getGameCards = async (req, res) => {
   const now = new Date();
   const cards = await BingoCard.find({
     gameId: req.params.id,
-    $or: [
-      { status: 'available' },
-      { status: 'selected', lockExpiresAt: { $gt: now } },
-    ],
+    status: { $in: ['available', 'selected'] },
   }).select('cardNumber status lockedBy card');
 
   // Mask actual card numbers for unowned cards
