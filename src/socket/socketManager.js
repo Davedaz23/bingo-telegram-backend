@@ -12,7 +12,11 @@ let io;
 function initSocket(server) {
   io = new Server(server, {
     cors: {
-      origin: ['https://web.telegram.org', 'https://telegram.org'],
+      origin: [
+        'https://web.telegram.org',
+        'https://telegram.org',
+        'https://bingo-telegram-frontend.vercel.app',
+      ],
       methods: ['GET', 'POST'],
       credentials: true,
     },

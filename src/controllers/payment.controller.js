@@ -8,11 +8,11 @@ const { AppError } = require('../middleware/errorHandler');
 
 exports.initiateDeposit = async (req, res) => {
   const { amount, channel, smsText } = req.body;
-  if (!amount || isNaN(amount)) throw new AppError('Valid amount required', 400);
   if (!channel) throw new AppError('Payment channel required (cbe, cbebirr, abyssinia, telebirr)', 400);
   if (!smsText) throw new AppError('SMS confirmation text required', 400);
 
-  const result = await requestSmsDeposit(req.userId, parseFloat(amount), channel.toLowerCase(), smsText);
+  const parsedAmount = (amount !== undefined && amount !== null && !isNaN(amount)) ? parseFloat(amount) : 0;
+  const result = await requestSmsDeposit(req.userId, parsedAmount, channel.toLowerCase(), smsText);
   res.json({ success: true, ...result });
 };
 

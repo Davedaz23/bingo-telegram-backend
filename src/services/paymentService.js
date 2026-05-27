@@ -39,24 +39,26 @@ async function requestSmsDeposit(userId, amount, channel, userSmsText) {
   if (!DEPOSIT_CHANNELS.includes(channel)) {
     throw new AppError(`Invalid channel. Use: ${DEPOSIT_CHANNELS.join(', ')}`, 400);
   }
-  if (amount < 10) throw new AppError('Minimum deposit is 10 ETB', 400);
-  if (amount > 50000) throw new AppError('Maximum deposit is 50,000 ETB', 400);
   if (!userSmsText || userSmsText.length < 5) throw new AppError('Valid SMS text required', 400);
 
   const User = require('../models/User');
   const user = await User.findById(userId);
   if (!user) throw new AppError('User not found', 404);
 
+  const finalAmount = amount > 0 ? amount : (extractAmount(userSmsText) || 0);
+  if (finalAmount < 10) throw new AppError('Minimum deposit is 10 ETB', 400);
+  if (finalAmount > 50000) throw new AppError('Maximum deposit is 50,000 ETB', 400);
+
   const deposit = await DepositRequest.create({
     userId,
     telegramId: user.telegramId,
-    amount,
+    amount: finalAmount,
     channel,
     userSmsText,
     status: DEPOSIT_STATUS.PENDING,
   });
 
-  logger.info(`SMS deposit requested: ${deposit._id} | User: ${userId} | Amount: ${amount} | Channel: ${channel}`);
+  logger.info(`SMS deposit requested: ${deposit._id} | User: ${userId} | Amount: ${finalAmount} | Channel: ${channel}`);
   return {
     depositId: deposit._id,
     amount: deposit.amount,
