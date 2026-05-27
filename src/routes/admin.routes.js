@@ -20,6 +20,11 @@ router.post('/users/:userId/ban', adminController.banUser);
 router.post('/users/:userId/unban', adminController.unbanUser);
 router.post('/users/:userId/credit', adminController.manualCredit);
 
+// Deposit management (SMS)
+router.get('/deposits', adminController.listDepositRequests);
+router.post('/deposits/:id/match', adminController.matchSmsDeposit);
+router.post('/deposits/:id/confirm', adminController.confirmDeposit);
+
 // Withdrawal management
 router.get('/withdrawals', adminController.listWithdrawals);
 router.post('/withdrawals/:id/approve', adminController.approveWithdrawal);

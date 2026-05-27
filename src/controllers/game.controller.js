@@ -1,6 +1,7 @@
 const Game = require('../models/Game');
 const BingoCard = require('../models/BingoCard');
 const {
+  ensureSelectionGame,
   createGame,
   selectCard,
   releaseCard,
@@ -17,8 +18,10 @@ const { AppError } = require('../middleware/errorHandler');
  * GET /api/games - list open games
  */
 exports.listGames = async (req, res) => {
+  await ensureSelectionGame();
+
   const games = await Game.find({
-    status: { $in: [GAME_STATUS.WAITING, GAME_STATUS.STARTING, GAME_STATUS.ACTIVE] },
+    status: { $in: [GAME_STATUS.SELECTION, GAME_STATUS.STARTING, GAME_STATUS.ACTIVE] },
   })
     .select('-drawSequence -drawnNumbers -players')
     .sort({ createdAt: -1 })

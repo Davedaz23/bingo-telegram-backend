@@ -11,16 +11,36 @@ const { GAME_STATUS, CARD_STATUS, TRANSACTION_TYPE, GAME_CONFIG, CARD_LOCK_TTL_S
 const logger = require('../utils/logger');
 const { AppError } = require('../middleware/errorHandler');
 
-/**
- * Generate a unique game code
- */
 function generateGameCode() {
   return 'BG' + Date.now().toString(36).toUpperCase().slice(-6);
 }
 
 /**
- * Create a new game session (admin only)
+ * Ensure exactly one game in SELECTION state exists.
+ * If none, create one with 400 cards.
  */
+async function ensureSelectionGame() {
+  let game = await Game.findOne({ status: GAME_STATUS.SELECTION }).sort({ createdAt: -1 });
+  if (!game) {
+    game = await Game.create({
+      gameCode: generateGameCode(),
+      cardPrice: GAME_CONFIG.CARD_PRICE,
+      platformFeePercent: GAME_CONFIG.PLATFORM_FEE_PERCENT,
+      winPattern: 'any_line',
+      maxPlayers: GAME_CONFIG.MAX_PLAYERS,
+      minPlayers: GAME_CONFIG.MIN_PLAYERS,
+      drawIntervalMs: GAME_CONFIG.NUMBER_DRAW_INTERVAL_MS,
+      drawSequence: generateDrawSequence(),
+      status: GAME_STATUS.SELECTION,
+    });
+
+    await generateCardsForGame(game._id, GAME_CONFIG.CARDS_PER_GAME);
+    logger.info(`Auto-created selection game: ${game.gameCode} with ${GAME_CONFIG.CARDS_PER_GAME} cards`);
+    getIO().emit('game:new', { gameId: game._id, gameCode: game.gameCode, cardPrice: game.cardPrice });
+  }
+  return game;
+}
+
 async function createGame(adminUserId, options = {}) {
   const game = await Game.create({
     gameCode: generateGameCode(),
@@ -31,42 +51,57 @@ async function createGame(adminUserId, options = {}) {
     minPlayers: options.minPlayers || GAME_CONFIG.MIN_PLAYERS,
     drawIntervalMs: options.drawIntervalMs || GAME_CONFIG.NUMBER_DRAW_INTERVAL_MS,
     drawSequence: generateDrawSequence(),
+    status: GAME_STATUS.SELECTION,
     createdBy: adminUserId,
   });
 
+  await generateCardsForGame(game._id, options.cardCount || GAME_CONFIG.CARDS_PER_GAME);
   logger.info(`Game created: ${game.gameCode} by admin ${adminUserId}`);
   getIO().emit('game:new', { gameId: game._id, gameCode: game.gameCode, cardPrice: game.cardPrice });
   return game;
 }
 
-/**
- * Select (lock) a card for purchase.
- * Returns locked card or null if unavailable.
- */
+async function ensureNextGameOnFinish(finishedGameId) {
+  const finished = await Game.findById(finishedGameId);
+  if (!finished) return;
+
+  const existingSelection = await Game.findOne({ status: GAME_STATUS.SELECTION });
+  if (existingSelection) return;
+
+  const game = await Game.create({
+    gameCode: generateGameCode(),
+    cardPrice: GAME_CONFIG.CARD_PRICE,
+    platformFeePercent: GAME_CONFIG.PLATFORM_FEE_PERCENT,
+    winPattern: 'any_line',
+    maxPlayers: GAME_CONFIG.MAX_PLAYERS,
+    minPlayers: GAME_CONFIG.MIN_PLAYERS,
+    drawIntervalMs: GAME_CONFIG.NUMBER_DRAW_INTERVAL_MS,
+    drawSequence: generateDrawSequence(),
+    status: GAME_STATUS.SELECTION,
+  });
+
+  await generateCardsForGame(game._id, GAME_CONFIG.CARDS_PER_GAME);
+  logger.info(`Auto-created next game after finish: ${game.gameCode}`);
+  getIO().emit('game:new', { gameId: game._id, gameCode: game.gameCode, cardPrice: game.cardPrice });
+}
+
 async function selectCard(gameId, cardId, userId) {
-  // Verify game is joinable
   const game = await Game.findById(gameId);
   if (!game) throw new AppError('Game not found', 404);
   if (!game.isJoinable) throw new AppError('Game is not accepting players', 400);
 
-  // Check if user already has a card in this game
   const alreadyIn = game.players.some(p => p.userId.toString() === userId.toString());
   if (alreadyIn) throw new AppError('You already have a card in this game', 400);
 
-  // Atomic lock
   const card = await BingoCard.tryLock(cardId, userId, CARD_LOCK_TTL_SECONDS);
   if (!card) throw new AppError('Card is no longer available. Please select another.', 409);
 
-  // Notify room that card is locked
   getIO().to(`game:${gameId}`).emit('card:locked', { cardId, cardNumber: card.cardNumber });
   logger.info(`Card ${card.cardNumber} locked by user ${userId} in game ${game.gameCode}`);
 
   return card;
 }
 
-/**
- * Release a locked card (user cancelled or timeout)
- */
 async function releaseCard(cardId, userId) {
   const card = await BingoCard.releaseLock(cardId, userId);
   if (card) {
@@ -75,10 +110,6 @@ async function releaseCard(cardId, userId) {
   return card;
 }
 
-/**
- * Purchase a card: debit wallet, confirm card ownership, add player to game.
- * Atomic via MongoDB session.
- */
 async function purchaseCard(gameId, cardId, userId) {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -86,29 +117,25 @@ async function purchaseCard(gameId, cardId, userId) {
   try {
     const game = await Game.findById(gameId).session(session);
     if (!game) throw new AppError('Game not found', 404);
-    if (game.status !== GAME_STATUS.WAITING && game.status !== GAME_STATUS.STARTING) {
+    if (game.status !== GAME_STATUS.SELECTION && game.status !== GAME_STATUS.STARTING) {
       throw new AppError('Game is not accepting new players', 400);
     }
 
-    // Double-check player not already in game
     const alreadyIn = game.players.some(p => p.userId.toString() === userId.toString());
     if (alreadyIn) throw new AppError('You already have a card in this game', 400);
 
-    // Confirm card lock → purchase
     const card = await BingoCard.confirmPurchase(cardId, userId);
     if (!card) throw new AppError('Card lock expired or was taken. Please select again.', 409);
 
     const user = await User.findById(userId).session(session);
     if (!user) throw new AppError('User not found', 404);
 
-    // Debit wallet
     await debitBalance(userId, game.cardPrice, TRANSACTION_TYPE.CARD_PURCHASE, {
       gameId,
       cardId,
       description: `Card #${card.cardNumber} in game ${game.gameCode}`,
     }, session);
 
-    // Add to prize pool + update player list
     await Game.updateOne(
       { _id: gameId },
       {
@@ -125,12 +152,10 @@ async function purchaseCard(gameId, cardId, userId) {
       { session }
     );
 
-    // Update card owner telegram id
     await BingoCard.updateOne({ _id: cardId }, { ownerTelegramId: user.telegramId }, { session });
 
     await session.commitTransaction();
 
-    // Reload game for broadcast
     const updatedGame = await Game.findById(gameId).populate('players.userId', 'firstName username');
     getIO().to(`game:${gameId}`).emit('game:playerJoined', {
       gameId,
@@ -141,8 +166,7 @@ async function purchaseCard(gameId, cardId, userId) {
 
     logger.info(`User ${userId} purchased card ${card.cardNumber} in game ${game.gameCode}`);
 
-    // Auto-start check
-    if (updatedGame.players.length >= updatedGame.maxPlayers) {
+    if (updatedGame.players.length >= 2 && game.status === GAME_STATUS.SELECTION) {
       await startGameCountdown(gameId);
     }
 
@@ -155,12 +179,9 @@ async function purchaseCard(gameId, cardId, userId) {
   }
 }
 
-/**
- * Admin: manually start the countdown
- */
 async function startGameCountdown(gameId) {
   const game = await Game.findOneAndUpdate(
-    { _id: gameId, status: GAME_STATUS.WAITING },
+    { _id: gameId, status: GAME_STATUS.SELECTION },
     {
       status: GAME_STATUS.STARTING,
       countdownStartedAt: new Date(),
@@ -178,15 +199,11 @@ async function startGameCountdown(gameId) {
 
   logger.info(`Game ${game.gameCode} countdown started (${game.players.length} players)`);
 
-  // After countdown, activate the game
   setTimeout(async () => {
     await activateGame(gameId);
   }, GAME_CONFIG.START_COUNTDOWN_SECONDS * 1000);
 }
 
-/**
- * Activate the game: begin drawing numbers
- */
 async function activateGame(gameId) {
   const game = await Game.findOneAndUpdate(
     { _id: gameId, status: GAME_STATUS.STARTING },
@@ -212,12 +229,8 @@ async function activateGame(gameId) {
   scheduleNumberDraw(gameId, game.drawIntervalMs);
 }
 
-// In-memory map of active draw intervals
 const drawIntervals = new Map();
 
-/**
- * Schedule recurring number draws for an active game
- */
 function scheduleNumberDraw(gameId, intervalMs) {
   if (drawIntervals.has(gameId.toString())) {
     clearInterval(drawIntervals.get(gameId.toString()));
@@ -230,9 +243,6 @@ function scheduleNumberDraw(gameId, intervalMs) {
   drawIntervals.set(gameId.toString(), interval);
 }
 
-/**
- * Draw the next number in the sequence
- */
 async function drawNextNumber(gameId) {
   const game = await Game.findById(gameId);
   if (!game || game.status !== GAME_STATUS.ACTIVE) {
@@ -242,7 +252,6 @@ async function drawNextNumber(gameId) {
   }
 
   if (game.currentDrawIndex >= game.drawSequence.length) {
-    // All 75 numbers drawn with no winner — refund
     clearInterval(drawIntervals.get(gameId));
     drawIntervals.delete(gameId);
     await cancelAndRefund(gameId, 'All 75 numbers drawn with no winner');
@@ -269,9 +278,6 @@ async function drawNextNumber(gameId) {
   logger.debug(`Game ${game.gameCode}: drew number ${number} (${game.currentDrawIndex + 1}/75)`);
 }
 
-/**
- * Player claims BINGO — verify server-side
- */
 async function claimBingo(gameId, userId) {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -286,33 +292,28 @@ async function claimBingo(gameId, userId) {
       throw new AppError('Game already has a winner', 400);
     }
 
-    // Find this player's card
     const player = game.players.find(p => p.userId.toString() === userId.toString());
     if (!player) throw new AppError('You are not in this game', 400);
 
     const card = await BingoCard.findById(player.cardId);
     if (!card) throw new AppError('Card not found', 404);
 
-    // Verify bingo server-side
     const hasBingo = checkBingo(card.card, game.drawnNumbers, game.winPattern);
     if (!hasBingo) {
       throw new AppError('No valid BINGO on your card with the drawn numbers', 400);
     }
 
-    // Stop drawing
     clearInterval(drawIntervals.get(gameId.toString()));
     drawIntervals.delete(gameId.toString());
 
     const { winnerPrize, platformFee } = calculatePrize(game.prizePool, game.platformFeePercent);
     const winningNumber = game.drawnNumbers[game.drawnNumbers.length - 1];
 
-    // Award winner
     await creditBalance(userId, winnerPrize, TRANSACTION_TYPE.GAME_WIN, {
       gameId,
       description: `Bingo win in game ${game.gameCode}`,
     }, session);
 
-    // Update game
     const user = await User.findById(userId).session(session);
     await Game.updateOne(
       { _id: gameId },
@@ -338,7 +339,6 @@ async function claimBingo(gameId, userId) {
       { session }
     );
 
-    // Increment gamesPlayed for all players
     const playerUserIds = game.players.map(p => p.userId);
     await User.updateMany(
       { _id: { $in: playerUserIds } },
@@ -364,6 +364,9 @@ async function claimBingo(gameId, userId) {
     });
 
     logger.info(`Game ${game.gameCode}: winner ${userId} won ${winnerPrize}`);
+
+    await ensureNextGameOnFinish(gameId);
+
     return { winnerPrize, platformFee, game };
   } catch (err) {
     await session.abortTransaction();
@@ -373,9 +376,6 @@ async function claimBingo(gameId, userId) {
   }
 }
 
-/**
- * Cancel game and refund all players
- */
 async function cancelAndRefund(gameId, reason = 'Game cancelled') {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -392,7 +392,6 @@ async function cancelAndRefund(gameId, reason = 'Game cancelled') {
       return null;
     }
 
-    // Refund all players who purchased cards
     for (const player of game.players) {
       try {
         await creditBalance(player.userId, game.cardPrice, TRANSACTION_TYPE.REFUND, {
@@ -410,7 +409,6 @@ async function cancelAndRefund(gameId, reason = 'Game cancelled') {
       { session }
     );
 
-    // Release all remaining locked cards
     await BingoCard.updateMany(
       { gameId, status: CARD_STATUS.SELECTED },
       {
@@ -431,6 +429,9 @@ async function cancelAndRefund(gameId, reason = 'Game cancelled') {
     });
 
     logger.info(`Game ${game.gameCode} cancelled & refunded: ${reason}`);
+
+    await ensureNextGameOnFinish(gameId);
+
     return game;
   } catch (err) {
     await session.abortTransaction();
@@ -441,10 +442,7 @@ async function cancelAndRefund(gameId, reason = 'Game cancelled') {
   }
 }
 
-/**
- * Generate cards for a game (bulk create)
- */
-async function generateCardsForGame(gameId, count = 90) {
+async function generateCardsForGame(gameId, count = 400) {
   const cards = [];
   for (let i = 1; i <= count; i++) {
     cards.push({
@@ -459,7 +457,9 @@ async function generateCardsForGame(gameId, count = 90) {
 }
 
 module.exports = {
+  ensureSelectionGame,
   createGame,
+  ensureNextGameOnFinish,
   selectCard,
   releaseCard,
   purchaseCard,

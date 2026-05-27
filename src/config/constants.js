@@ -1,11 +1,11 @@
 module.exports = {
   GAME_STATUS: {
-    WAITING: 'waiting',       // waiting for players
-    STARTING: 'starting',     // countdown started
-    ACTIVE: 'active',         // game in progress
-    FINISHED: 'finished',     // game completed with winner
-    CANCELLED: 'cancelled',   // cancelled (refund triggered)
-    REFUNDING: 'refunding',   // refund in progress
+    SELECTION: 'selection',     // cards available, players select
+    STARTING: 'starting',       // countdown started
+    ACTIVE: 'active',           // game in progress
+    FINISHED: 'finished',       // game completed with winner
+    CANCELLED: 'cancelled',     // cancelled (refund triggered)
+    REFUNDING: 'refunding',     // refund in progress
   },
 
   CARD_STATUS: {
@@ -39,22 +39,32 @@ module.exports = {
     REJECTED: 'rejected',
   },
 
+  DEPOSIT_CHANNELS: ['cbe', 'cbebirr', 'abyssinia', 'telebirr'],
+
+  DEPOSIT_STATUS: {
+    PENDING: 'pending',
+    SMS_MATCHED: 'sms_matched',
+    COMPLETED: 'completed',
+    REJECTED: 'rejected',
+  },
+
   BINGO_PATTERNS: {
     FULL_CARD: 'full_card',
-    ANY_LINE: 'any_line',       // horizontal, vertical, or diagonal
+    ANY_LINE: 'any_line',
     FOUR_CORNERS: 'four_corners',
   },
 
-  CARD_LOCK_TTL_SECONDS: 120, // 2 minutes to complete purchase after selecting
+  CARD_LOCK_TTL_SECONDS: 120,
 
   GAME_CONFIG: {
     MIN_PLAYERS: parseInt(process.env.MIN_PLAYERS) || 2,
     MAX_PLAYERS: parseInt(process.env.MAX_PLAYERS) || 100,
+    CARDS_PER_GAME: 400,
     CARD_PRICE: parseFloat(process.env.CARD_PRICE) || 50,
     PLATFORM_FEE_PERCENT: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 10,
-    NUMBER_DRAW_INTERVAL_MS: 5000, // draw a number every 5 seconds
+    NUMBER_DRAW_INTERVAL_MS: 5000,
     START_COUNTDOWN_SECONDS: 30,
-    MIN_PLAYERS_TO_AUTO_START: parseInt(process.env.MIN_PLAYERS) || 2,
+    SELECTION_TIMEOUT_SECONDS: 120, // wait up to 2 min for 2nd player after first selection
     REFUND_TIMEOUT_MINUTES: parseInt(process.env.REFUND_TIMEOUT_MINUTES) || 5,
   },
 

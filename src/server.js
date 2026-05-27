@@ -5,6 +5,7 @@ const { initSocket } = require('./socket/socketManager');
 const connectDB = require('./config/database');
 const logger = require('./utils/logger');
 const { startGameScheduler } = require('./services/gameScheduler');
+const { ensureSelectionGame } = require('./services/gameService');
 
 const PORT = process.env.PORT || 6000;
 
@@ -20,6 +21,10 @@ async function startServer() {
     // Initialize Socket.IO
     initSocket(server);
     logger.info('✅ Socket.IO initialized');
+
+    // Ensure a selection game exists
+    await ensureSelectionGame();
+    logger.info('✅ Selection game ensured');
 
     // Start game scheduler (cron jobs)
     startGameScheduler();

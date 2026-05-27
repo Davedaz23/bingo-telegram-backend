@@ -1,11 +1,20 @@
 const cron = require('node-cron');
 const Game = require('../models/Game');
 const BingoCard = require('../models/BingoCard');
-const { cancelAndRefund } = require('./gameService');
+const { ensureSelectionGame, cancelAndRefund } = require('./gameService');
 const { GAME_STATUS, CARD_STATUS } = require('../config/constants');
 const logger = require('../utils/logger');
 
 function startGameScheduler() {
+  // Every 30 seconds: ensure a selection game exists
+  cron.schedule('*/30 * * * * *', async () => {
+    try {
+      await ensureSelectionGame();
+    } catch (err) {
+      logger.error('Ensure selection game error:', err);
+    }
+  });
+
   // Every minute: release expired card locks
   cron.schedule('* * * * *', async () => {
     try {
@@ -32,10 +41,10 @@ function startGameScheduler() {
     }
   });
 
-  // Every 5 minutes: cancel stale "starting" games that never activated
+  // Every 5 minutes: cancel stale starting games
   cron.schedule('*/5 * * * *', async () => {
     try {
-      const cutoff = new Date(Date.now() - 10 * 60 * 1000); // 10 mins ago
+      const cutoff = new Date(Date.now() - 10 * 60 * 1000);
       const staleGames = await Game.find({
         status: GAME_STATUS.STARTING,
         countdownStartedAt: { $lt: cutoff },
@@ -49,15 +58,15 @@ function startGameScheduler() {
     }
   });
 
-  // Every 30 minutes: log active game stats
+  // Every 30 minutes: log game stats
   cron.schedule('*/30 * * * *', async () => {
     try {
-      const [waiting, active, starting] = await Promise.all([
-        Game.countDocuments({ status: GAME_STATUS.WAITING }),
+      const [selection, active, starting] = await Promise.all([
+        Game.countDocuments({ status: GAME_STATUS.SELECTION }),
         Game.countDocuments({ status: GAME_STATUS.ACTIVE }),
         Game.countDocuments({ status: GAME_STATUS.STARTING }),
       ]);
-      logger.info(`Game stats — Waiting: ${waiting} | Starting: ${starting} | Active: ${active}`);
+      logger.info(`Game stats — Selection: ${selection} | Starting: ${starting} | Active: ${active}`);
     } catch (err) {
       logger.error('Stats cron error:', err);
     }

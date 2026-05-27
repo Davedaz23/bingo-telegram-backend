@@ -2,33 +2,30 @@ const Game = require('../models/Game');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Withdrawal = require('../models/Withdrawal');
+const DepositRequest = require('../models/DepositRequest');
 const {
   createGame,
   generateCardsForGame,
   startGameCountdown,
   cancelAndRefund,
 } = require('../services/gameService');
+const { matchAndConfirmDeposit, adminConfirmDeposit } = require('../services/paymentService');
 const { processWithdrawal, rejectWithdrawal } = require('../services/withdrawalService');
 const { creditBalance } = require('../services/walletService');
-const { GAME_STATUS, TRANSACTION_TYPE, WITHDRAWAL_STATUS } = require('../config/constants');
+const { GAME_STATUS, TRANSACTION_TYPE, WITHDRAWAL_STATUS, DEPOSIT_STATUS } = require('../config/constants');
 const { AppError } = require('../middleware/errorHandler');
 
 // ─── Game Management ──────────────────────────────────────────────────────────
 
 exports.createGame = async (req, res) => {
   const game = await createGame(req.userId, req.body);
-
-  // Generate cards
-  const cardCount = req.body.cardCount || 90;
-  await generateCardsForGame(game._id, cardCount);
-
   res.status(201).json({ success: true, game });
 };
 
 exports.startGame = async (req, res) => {
   const game = await Game.findById(req.params.id);
   if (!game) throw new AppError('Game not found', 404);
-  if (game.status !== GAME_STATUS.WAITING) throw new AppError('Game not in waiting state', 400);
+  if (game.status !== GAME_STATUS.SELECTION) throw new AppError('Game not in selection state', 400);
   if (game.players.length < game.minPlayers) {
     throw new AppError(`Need at least ${game.minPlayers} players to start`, 400);
   }
@@ -110,6 +107,33 @@ exports.manualCredit = async (req, res) => {
   res.json({ success: true, message: `Credited ${amount} to user` });
 };
 
+// ─── Deposit Management (SMS) ─────────────────────────────────────────────────
+
+exports.listDepositRequests = async (req, res) => {
+  const { status } = req.query;
+  const filter = status ? { status } : { status: DEPOSIT_STATUS.PENDING };
+
+  const deposits = await DepositRequest.find(filter)
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .populate('userId', 'firstName username telegramId');
+
+  res.json({ success: true, deposits });
+};
+
+exports.matchSmsDeposit = async (req, res) => {
+  const { adminSmsText } = req.body;
+  if (!adminSmsText) throw new AppError('Admin SMS text required', 400);
+
+  const result = await matchAndConfirmDeposit(req.params.id, adminSmsText, req.userId);
+  res.json({ success: true, ...result });
+};
+
+exports.confirmDeposit = async (req, res) => {
+  const result = await adminConfirmDeposit(req.params.id, req.userId);
+  res.json({ success: true, ...result });
+};
+
 // ─── Withdrawal Management ────────────────────────────────────────────────────
 
 exports.listWithdrawals = async (req, res) => {
@@ -143,14 +167,16 @@ exports.getDashboard = async (req, res) => {
     totalUsers, activeUsers,
     totalGames, activeGames, completedGames,
     pendingWithdrawals,
+    pendingDeposits,
     recentTransactions,
   ] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ isActive: true }),
     Game.countDocuments(),
-    Game.countDocuments({ status: { $in: [GAME_STATUS.WAITING, GAME_STATUS.ACTIVE, GAME_STATUS.STARTING] } }),
+    Game.countDocuments({ status: { $in: [GAME_STATUS.SELECTION, GAME_STATUS.ACTIVE, GAME_STATUS.STARTING] } }),
     Game.countDocuments({ status: GAME_STATUS.FINISHED }),
     Withdrawal.countDocuments({ status: WITHDRAWAL_STATUS.PENDING }),
+    DepositRequest.countDocuments({ status: DEPOSIT_STATUS.PENDING }),
     Transaction.find().sort({ createdAt: -1 }).limit(10).populate('userId', 'firstName telegramId'),
   ]);
 
@@ -165,6 +191,7 @@ exports.getDashboard = async (req, res) => {
       users: { total: totalUsers, active: activeUsers },
       games: { total: totalGames, active: activeGames, completed: completedGames },
       pendingWithdrawals,
+      pendingDeposits,
       platformRevenue: totalRevenue[0]?.total || 0,
     },
     recentTransactions,

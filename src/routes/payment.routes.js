@@ -7,7 +7,7 @@ router.use(authenticateTelegram);
 
 router.get('/balance', paymentController.getBalance);
 router.post('/deposit', paymentController.initiateDeposit);
-router.get('/deposit/verify/:txRef', paymentController.verifyDeposit);
+router.get('/deposit/accounts', paymentController.getDepositAccounts);
 router.get('/transactions', paymentController.getTransactions);
 router.post('/transfer', paymentController.transfer);
 

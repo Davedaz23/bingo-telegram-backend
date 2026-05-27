@@ -13,7 +13,7 @@ const gameSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: Object.values(GAME_STATUS),
-    default: GAME_STATUS.WAITING,
+    default: GAME_STATUS.SELECTION,
     index: true,
   },
 
@@ -86,7 +86,7 @@ gameSchema.virtual('playerCount').get(function () {
 
 gameSchema.virtual('isJoinable').get(function () {
   return (
-    this.status === GAME_STATUS.WAITING &&
+    this.status === GAME_STATUS.SELECTION &&
     this.players.length < this.maxPlayers
   );
 });

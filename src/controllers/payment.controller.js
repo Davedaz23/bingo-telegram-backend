@@ -1,25 +1,18 @@
-const { initiateDeposit, verifyAndCompleteDeposit } = require('../services/paymentService');
+const { requestSmsDeposit } = require('../services/paymentService');
 const { requestWithdrawal } = require('../services/withdrawalService');
 const Transaction = require('../models/Transaction');
 const Withdrawal = require('../models/Withdrawal');
-const User = require('../models/User');
 const walletService = require('../services/walletService');
 const { TRANSACTION_TYPE } = require('../config/constants');
 const { AppError } = require('../middleware/errorHandler');
 
-// ─── Payment / Deposit ────────────────────────────────────────────────────────
-
 exports.initiateDeposit = async (req, res) => {
-  const { amount } = req.body;
+  const { amount, channel, smsText } = req.body;
   if (!amount || isNaN(amount)) throw new AppError('Valid amount required', 400);
+  if (!channel) throw new AppError('Payment channel required (cbe, cbebirr, abyssinia, telebirr)', 400);
+  if (!smsText) throw new AppError('SMS confirmation text required', 400);
 
-  const result = await initiateDeposit(req.userId, parseFloat(amount));
-  res.json({ success: true, ...result });
-};
-
-exports.verifyDeposit = async (req, res) => {
-  const { txRef } = req.params;
-  const result = await verifyAndCompleteDeposit(txRef);
+  const result = await requestSmsDeposit(req.userId, parseFloat(amount), channel.toLowerCase(), smsText);
   res.json({ success: true, ...result });
 };
 
@@ -43,8 +36,6 @@ exports.getTransactions = async (req, res) => {
 
   res.json({ success: true, transactions: txs, total, page, pages: Math.ceil(total / limit) });
 };
-
-// ─── Withdrawal ───────────────────────────────────────────────────────────────
 
 exports.requestWithdrawal = async (req, res) => {
   const { amount, accountNumber, bankName, phoneNumber, accountHolderName } = req.body;
@@ -70,8 +61,6 @@ exports.getMyWithdrawals = async (req, res) => {
   res.json({ success: true, withdrawals });
 };
 
-// ─── Transfer ─────────────────────────────────────────────────────────────────
-
 exports.transfer = async (req, res) => {
   const { toTelegramId, amount, note } = req.body;
   if (!toTelegramId || !amount || isNaN(amount)) {
@@ -85,6 +74,7 @@ exports.transfer = async (req, res) => {
     throw new AppError('Cannot transfer to yourself', 400);
   }
 
+  const User = require('../models/User');
   const recipient = await User.findOne({ telegramId: toTelegramId });
   if (!recipient || !recipient.isActive) throw new AppError('Recipient not found', 404);
 
@@ -102,4 +92,15 @@ exports.transfer = async (req, res) => {
 exports.getBalance = async (req, res) => {
   const balance = await walletService.getBalance(req.userId);
   res.json({ success: true, balance });
+};
+
+exports.getDepositAccounts = async (req, res) => {
+  const accounts = {
+    cbe: process.env.DEPOSIT_ACCOUNT_CBE || '1000123456789',
+    cbebirr: process.env.DEPOSIT_ACCOUNT_CBEBIRR || '0900123456',
+    abyssinia: process.env.DEPOSIT_ACCOUNT_ABYSSINIA || '1234567890',
+    telebirr: process.env.DEPOSIT_ACCOUNT_TELEBIRR || '0911121314',
+    accountName: process.env.DEPOSIT_ACCOUNT_NAME || 'Bingo Ethiopia PLC',
+  };
+  res.json({ success: true, accounts });
 };

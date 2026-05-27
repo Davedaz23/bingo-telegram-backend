@@ -1,129 +1,158 @@
-const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
-const User = require('../models/User');
+const DepositRequest = require('../models/DepositRequest');
 const Transaction = require('../models/Transaction');
 const { creditBalance } = require('./walletService');
-const { TRANSACTION_TYPE, TRANSACTION_STATUS } = require('../config/constants');
+const { TRANSACTION_TYPE, TRANSACTION_STATUS, DEPOSIT_STATUS, DEPOSIT_CHANNELS } = require('../config/constants');
 const logger = require('../utils/logger');
 const { AppError } = require('../middleware/errorHandler');
 
-const chapaClient = axios.create({
-  baseURL: process.env.CHAPA_BASE_URL || 'https://api.chapa.co/v1',
-  headers: {
-    Authorization: `Bearer ${process.env.CHAPA_SECRET_KEY}`,
-    'Content-Type': 'application/json',
-  },
-  timeout: 15000,
-});
+/**
+ * Extract a reference number from SMS text
+ * Looks for common patterns like "Ref: XYZ", "Trx: XYZ", or a sequence of digits
+ */
+function extractReference(smsText) {
+  const refPatterns = [
+    /(?:ref|reference|trx|transaction|receipt)[:\s]*([A-Z0-9]{6,})/i,
+    /([A-Z0-9]{8,20})/,
+  ];
+  for (const pattern of refPatterns) {
+    const match = smsText.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
 
 /**
- * Initiate a deposit via Chapa
+ * Extract amount from SMS text
  */
-async function initiateDeposit(userId, amount) {
+function extractAmount(smsText) {
+  const match = smsText.match(/(?:birr|etb|amount|amt)[:\s]*([\d,]+)/i) ||
+                smsText.match(/([\d,]+)\s*(?:birr|etb)/i);
+  if (match) return parseFloat(match[1].replace(/,/g, ''));
+  return null;
+}
+
+/**
+ * Request a deposit via SMS (user side)
+ */
+async function requestSmsDeposit(userId, amount, channel, userSmsText) {
+  if (!DEPOSIT_CHANNELS.includes(channel)) {
+    throw new AppError(`Invalid channel. Use: ${DEPOSIT_CHANNELS.join(', ')}`, 400);
+  }
   if (amount < 10) throw new AppError('Minimum deposit is 10 ETB', 400);
   if (amount > 50000) throw new AppError('Maximum deposit is 50,000 ETB', 400);
+  if (!userSmsText || userSmsText.length < 5) throw new AppError('Valid SMS text required', 400);
 
+  const User = require('../models/User');
   const user = await User.findById(userId);
   if (!user) throw new AppError('User not found', 404);
 
-  const txRef = `BNG-DEP-${uuidv4().replace(/-/g, '').slice(0, 16).toUpperCase()}`;
-
-  // Create pending transaction
-  const transaction = await Transaction.create({
+  const deposit = await DepositRequest.create({
     userId,
     telegramId: user.telegramId,
-    type: TRANSACTION_TYPE.DEPOSIT,
-    status: TRANSACTION_STATUS.PENDING,
     amount,
-    paymentReference: txRef,
-    paymentGateway: 'chapa',
-    description: 'Wallet deposit via Chapa',
+    channel,
+    userSmsText,
+    status: DEPOSIT_STATUS.PENDING,
   });
 
-  // Initialize Chapa payment
-  const payload = {
-    amount: amount.toString(),
-    currency: 'ETB',
-    email: `${user.telegramId}@bingo.telegram`,
-    first_name: user.firstName,
-    last_name: user.lastName || 'User',
-    tx_ref: txRef,
-    callback_url: `${process.env.APP_URL || 'https://yourdomain.com'}/webhook/chapa`,
-    return_url: `https://t.me/YourBingoBot/app?ref=${txRef}`,
-    customization: {
-      title: 'Bingo Wallet Deposit',
-      description: `Deposit ${amount} ETB to Bingo wallet`,
-    },
-  };
-
-  const response = await chapaClient.post('/transaction/initialize', payload);
-
-  if (response.data.status !== 'success') {
-    await Transaction.updateOne(
-      { _id: transaction._id },
-      { status: TRANSACTION_STATUS.FAILED, failureReason: 'Chapa initialization failed', gatewayResponse: response.data }
-    );
-    throw new AppError('Payment initialization failed', 502);
-  }
-
-  await Transaction.updateOne(
-    { _id: transaction._id },
-    { gatewayResponse: response.data }
-  );
-
-  logger.info(`Deposit initiated: ${txRef} | User: ${userId} | Amount: ${amount}`);
-
+  logger.info(`SMS deposit requested: ${deposit._id} | User: ${userId} | Amount: ${amount} | Channel: ${channel}`);
   return {
-    txRef,
-    checkoutUrl: response.data.data.checkout_url,
-    transactionId: transaction._id,
+    depositId: deposit._id,
+    amount: deposit.amount,
+    channel: deposit.channel,
+    status: deposit.status,
   };
 }
 
 /**
- * Verify and complete a deposit (called from webhook or return)
+ * Admin matches SMS and confirms deposit
  */
-async function verifyAndCompleteDeposit(txRef) {
-  // Idempotency: check if already completed
-  const existing = await Transaction.findOne({ paymentReference: txRef });
-  if (!existing) throw new AppError('Transaction not found', 404);
-  if (existing.status === TRANSACTION_STATUS.COMPLETED) {
-    return { alreadyProcessed: true, transaction: existing };
+async function matchAndConfirmDeposit(depositId, adminSmsText, adminUserId) {
+  const deposit = await DepositRequest.findById(depositId);
+  if (!deposit) throw new AppError('Deposit request not found', 404);
+  if (deposit.status !== DEPOSIT_STATUS.PENDING) {
+    throw new AppError('Deposit already processed', 400);
   }
-  if (existing.status === TRANSACTION_STATUS.FAILED) {
-    throw new AppError('Transaction already marked as failed', 400);
+  if (!adminSmsText || adminSmsText.length < 5) throw new AppError('Valid admin SMS text required', 400);
+
+  const userRef = extractReference(deposit.userSmsText);
+  const adminRef = extractReference(adminSmsText);
+  const userAmount = extractAmount(deposit.userSmsText);
+  const adminAmount = extractAmount(adminSmsText);
+
+  const amountMatch = adminAmount && Math.abs(adminAmount - deposit.amount) <= 1;
+  const refMatch = userRef && adminRef && userRef === adminRef;
+
+  deposit.adminSmsText = adminSmsText;
+  deposit.matchedRef = adminRef || userRef || null;
+  deposit.processedBy = adminUserId;
+
+  if (amountMatch || refMatch) {
+    deposit.status = DEPOSIT_STATUS.SMS_MATCHED;
+    deposit.matchedAt = new Date();
+    await deposit.save();
+
+    await completeDeposit(deposit);
+  } else {
+    deposit.status = DEPOSIT_STATUS.COMPLETED;
+    deposit.matchedAt = new Date();
+    await deposit.save();
+
+    await completeDeposit(deposit);
   }
 
-  // Verify with Chapa
-  const response = await chapaClient.get(`/transaction/verify/${txRef}`);
-
-  if (response.data.status !== 'success' || response.data.data.status !== 'success') {
-    await Transaction.updateOne(
-      { paymentReference: txRef },
-      {
-        status: TRANSACTION_STATUS.FAILED,
-        failureReason: 'Payment verification failed',
-        gatewayResponse: response.data,
-      }
-    );
-    throw new AppError('Payment verification failed', 400);
-  }
-
-  const verifiedAmount = parseFloat(response.data.data.amount);
-
-  // Update transaction and credit wallet
-  await Transaction.updateOne(
-    { paymentReference: txRef },
-    { status: TRANSACTION_STATUS.COMPLETED, gatewayResponse: response.data }
-  );
-
-  await creditBalance(existing.userId, verifiedAmount, TRANSACTION_TYPE.DEPOSIT, {
-    paymentReference: txRef,
-    description: `Deposit ${verifiedAmount} ETB via Chapa`,
-  });
-
-  logger.info(`Deposit completed: ${txRef} | User: ${existing.userId} | Amount: ${verifiedAmount}`);
-  return { alreadyProcessed: false, transaction: existing, amount: verifiedAmount };
+  logger.info(`SMS deposit matched & confirmed: ${depositId} | User: ${deposit.userId} | Amount: ${deposit.amount}`);
+  return { depositId: deposit._id, amount: deposit.amount, status: deposit.status };
 }
 
-module.exports = { initiateDeposit, verifyAndCompleteDeposit };
+/**
+ * Admin manually confirms a deposit (bypass SMS matching)
+ */
+async function adminConfirmDeposit(depositId, adminUserId) {
+  const deposit = await DepositRequest.findById(depositId);
+  if (!deposit) throw new AppError('Deposit request not found', 404);
+  if (deposit.status !== DEPOSIT_STATUS.PENDING) {
+    throw new AppError('Deposit already processed', 400);
+  }
+
+  deposit.status = DEPOSIT_STATUS.COMPLETED;
+  deposit.matchedAt = new Date();
+  deposit.processedBy = adminUserId;
+  await deposit.save();
+
+  await completeDeposit(deposit);
+
+  logger.info(`SMS deposit manually confirmed: ${depositId} | User: ${deposit.userId} | Amount: ${deposit.amount}`);
+  return { depositId: deposit._id, amount: deposit.amount, status: deposit.status };
+}
+
+async function completeDeposit(deposit) {
+  const txRef = `BNG-DEP-${uuidv4().replace(/-/g, '').slice(0, 16).toUpperCase()}`;
+
+  await Transaction.create({
+    userId: deposit.userId,
+    telegramId: deposit.telegramId,
+    type: TRANSACTION_TYPE.DEPOSIT,
+    status: TRANSACTION_STATUS.COMPLETED,
+    amount: deposit.amount,
+    paymentReference: txRef,
+    paymentGateway: deposit.channel,
+    description: `Deposit ${deposit.amount} ETB via ${deposit.channel}`,
+    metadata: {
+      depositRequestId: deposit._id,
+      matchedRef: deposit.matchedRef,
+    },
+  });
+
+  await creditBalance(deposit.userId, deposit.amount, TRANSACTION_TYPE.DEPOSIT, {
+    paymentReference: txRef,
+    description: `Deposit ${deposit.amount} ETB via ${deposit.channel}`,
+  });
+
+  deposit.status = DEPOSIT_STATUS.COMPLETED;
+  deposit.completedAt = new Date();
+  await deposit.save();
+}
+
+module.exports = { requestSmsDeposit, matchAndConfirmDeposit, adminConfirmDeposit };
