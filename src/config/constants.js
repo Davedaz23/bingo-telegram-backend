@@ -58,7 +58,7 @@ module.exports = {
 
   GAME_CONFIG: {
     MIN_PLAYERS: parseInt(process.env.MIN_PLAYERS) || 2,
-    MAX_PLAYERS: parseInt(process.env.MAX_PLAYERS) || 100,
+    MAX_PLAYERS: parseInt(process.env.MAX_PLAYERS) || 400,
     CARDS_PER_GAME: 400,
     CARD_PRICE: parseFloat(process.env.CARD_PRICE) || 10,
     PLATFORM_FEE_PERCENT: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 20,
