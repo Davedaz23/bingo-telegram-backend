@@ -86,97 +86,138 @@ async function ensureNextGameOnFinish(finishedGameId) {
 }
 
 async function selectCard(gameId, cardId, userId) {
+  return purchaseCard(gameId, cardId, userId);
+}
+
+async function releaseCard(cardId, userId) {
+  const card = await BingoCard.findById(cardId);
+  if (!card) return null;
+
+  if (card.status === CARD_STATUS.SELECTED && card.lockedBy?.toString() === userId.toString()) {
+    const released = await BingoCard.releaseLock(cardId, userId);
+    if (released) {
+      getIO().to(`game:${card.gameId}`).emit('card:released', { cardId, cardNumber: card.cardNumber });
+    }
+    return released;
+  }
+
+  if (card.status === CARD_STATUS.PURCHASED && card.ownerId?.toString() === userId.toString()) {
+    const game = await Game.findById(card.gameId);
+    if (!game || game.status !== GAME_STATUS.SELECTION) {
+      throw new AppError('Can only refund cards during selection phase', 400);
+    }
+
+    await creditBalance(userId, game.cardPrice, TRANSACTION_TYPE.REFUND, {
+      gameId: card.gameId.toString(),
+      cardId,
+      description: `Refund for card #${card.cardNumber}`,
+    });
+
+    await BingoCard.updateOne(
+      { _id: cardId },
+      {
+        $set: {
+          status: CARD_STATUS.AVAILABLE,
+          ownerId: null,
+          ownerTelegramId: null,
+          purchasedAt: null,
+        },
+      }
+    );
+
+    await Game.updateOne(
+      { _id: card.gameId },
+      {
+        $inc: { prizePool: -game.cardPrice },
+        $pull: { players: { cardId } },
+      }
+    );
+
+    getIO().to(`game:${card.gameId}`).emit('card:released', { cardId, cardNumber: card.cardNumber });
+    getIO().to(`game:${card.gameId}`).emit('card:purchased', { cardId, cardNumber: card.cardNumber, userId, refunded: true });
+    logger.info(`User ${userId} refunded card ${card.cardNumber} in game ${game.gameCode}`);
+    return card;
+  }
+
+  return null;
+}
+
+async function purchaseCard(gameId, cardId, userId) {
   const game = await Game.findById(gameId);
   if (!game) throw new AppError('Game not found', 404);
-  if (!game.isJoinable) throw new AppError('Game is not accepting players', 400);
+  if (game.status !== GAME_STATUS.SELECTION) {
+    throw new AppError('Game is not accepting new players', 400);
+  }
 
   const alreadyIn = game.players.some(p => p.userId.toString() === userId.toString());
   if (alreadyIn) throw new AppError('You already have a card in this game', 400);
 
-  const card = await BingoCard.tryLock(cardId, userId, CARD_LOCK_TTL_SECONDS);
-  if (!card) throw new AppError('Card is no longer available. Please select another.', 409);
+  const card = await BingoCard.findOneAndUpdate(
+    {
+      _id: cardId,
+      gameId,
+      status: CARD_STATUS.AVAILABLE,
+    },
+    {
+      $set: {
+        status: CARD_STATUS.PURCHASED,
+        ownerId: userId,
+        purchasedAt: new Date(),
+      },
+    },
+    { new: true }
+  );
+  if (!card) throw new AppError('Card is no longer available', 409);
 
-  getIO().to(`game:${gameId}`).emit('card:locked', { cardId, cardNumber: card.cardNumber });
-  logger.info(`Card ${card.cardNumber} locked by user ${userId} in game ${game.gameCode}`);
-
-  return card;
-}
-
-async function releaseCard(cardId, userId) {
-  const card = await BingoCard.releaseLock(cardId, userId);
-  if (card) {
-    getIO().to(`game:${card.gameId}`).emit('card:released', { cardId, cardNumber: card.cardNumber });
+  const user = await User.findById(userId);
+  if (!user) {
+    await BingoCard.updateOne({ _id: cardId }, { $set: { status: CARD_STATUS.AVAILABLE, ownerId: null, purchasedAt: null } });
+    throw new AppError('User not found', 404);
   }
-  return card;
-}
-
-async function purchaseCard(gameId, cardId, userId) {
-  const session = await mongoose.startSession();
-  session.startTransaction();
 
   try {
-    const game = await Game.findById(gameId).session(session);
-    if (!game) throw new AppError('Game not found', 404);
-    if (game.status !== GAME_STATUS.SELECTION && game.status !== GAME_STATUS.STARTING) {
-      throw new AppError('Game is not accepting new players', 400);
-    }
-
-    const alreadyIn = game.players.some(p => p.userId.toString() === userId.toString());
-    if (alreadyIn) throw new AppError('You already have a card in this game', 400);
-
-    const card = await BingoCard.confirmPurchase(cardId, userId);
-    if (!card) throw new AppError('Card lock expired or was taken. Please select again.', 409);
-
-    const user = await User.findById(userId).session(session);
-    if (!user) throw new AppError('User not found', 404);
-
     await debitBalance(userId, game.cardPrice, TRANSACTION_TYPE.CARD_PURCHASE, {
       gameId,
       cardId,
       description: `Card #${card.cardNumber} in game ${game.gameCode}`,
-    }, session);
+    });
+  } catch (err) {
+    await BingoCard.updateOne({ _id: cardId }, { $set: { status: CARD_STATUS.AVAILABLE, ownerId: null, purchasedAt: null } });
+    throw err;
+  }
 
-    await Game.updateOne(
-      { _id: gameId },
-      {
-        $inc: { prizePool: game.cardPrice },
-        $push: {
-          players: {
-            userId,
-            telegramId: user.telegramId,
-            cardId,
-            joinedAt: new Date(),
-          },
+  await BingoCard.updateOne({ _id: cardId }, { ownerTelegramId: user.telegramId });
+
+  await Game.updateOne(
+    { _id: gameId },
+    {
+      $inc: { prizePool: game.cardPrice },
+      $push: {
+        players: {
+          userId,
+          telegramId: user.telegramId,
+          cardId,
+          joinedAt: new Date(),
         },
       },
-      { session }
-    );
-
-    await BingoCard.updateOne({ _id: cardId }, { ownerTelegramId: user.telegramId }, { session });
-
-    await session.commitTransaction();
-
-    const updatedGame = await Game.findById(gameId).populate('players.userId', 'firstName username');
-    getIO().to(`game:${gameId}`).emit('game:playerJoined', {
-      gameId,
-      playerCount: updatedGame.players.length,
-      prizePool: updatedGame.prizePool,
-    });
-    getIO().to(`game:${gameId}`).emit('card:purchased', { cardId, cardNumber: card.cardNumber, userId });
-
-    logger.info(`User ${userId} purchased card ${card.cardNumber} in game ${game.gameCode}`);
-
-    if (updatedGame.players.length >= 2 && game.status === GAME_STATUS.SELECTION) {
-      await startGameCountdown(gameId);
     }
+  );
 
-    return { card, prizePool: updatedGame.prizePool };
-  } catch (err) {
-    await session.abortTransaction();
-    throw err;
-  } finally {
-    session.endSession();
+  const updatedGame = await Game.findById(gameId).populate('players.userId', 'firstName username');
+  getIO().to(`game:${gameId}`).emit('game:playerJoined', {
+    gameId,
+    playerCount: updatedGame.players.length,
+    prizePool: updatedGame.prizePool,
+  });
+  getIO().to(`game:${gameId}`).emit('card:purchased', { cardId, cardNumber: card.cardNumber, userId });
+
+  logger.info(`User ${userId} purchased card ${card.cardNumber} in game ${game.gameCode}`);
+
+  if (updatedGame.players.length >= 2 && game.status === GAME_STATUS.SELECTION) {
+    await startGameCountdown(gameId);
   }
+
+  return { card, prizePool: updatedGame.prizePool };
 }
 
 async function startGameCountdown(gameId) {

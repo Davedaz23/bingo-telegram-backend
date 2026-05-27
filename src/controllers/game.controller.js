@@ -46,19 +46,18 @@ exports.getGame = async (req, res) => {
  * GET /api/games/:id/cards - list available cards
  */
 exports.getGameCards = async (req, res) => {
-  const now = new Date();
   const cards = await BingoCard.find({
     gameId: req.params.id,
-    status: { $in: ['available', 'selected'] },
-  }).select('cardNumber status lockedBy card');
+    status: { $in: ['available', 'selected', 'purchased'] },
+  }).select('cardNumber status lockedBy ownerId card');
 
-  // Mask actual card numbers for unowned cards
   const sanitized = cards.map(c => ({
     _id: c._id,
     cardNumber: c.cardNumber,
     status: c.status,
+    isOwnedByMe: c.ownerId?.toString() === req.userId,
     isLockedByMe: c.lockedBy?.toString() === req.userId,
-    card: c.lockedBy?.toString() === req.userId || c.status === 'purchased' ? c.card : null,
+    card: c.ownerId?.toString() === req.userId || c.lockedBy?.toString() === req.userId ? c.card : null,
   }));
 
   res.json({ success: true, cards: sanitized });
@@ -68,16 +67,12 @@ exports.getGameCards = async (req, res) => {
  * POST /api/games/:id/cards/:cardId/select
  */
 exports.selectCard = async (req, res) => {
-  const card = await selectCard(req.params.id, req.params.cardId, req.userId);
+  const result = await selectCard(req.params.id, req.params.cardId, req.userId);
   res.json({
     success: true,
-    message: 'Card locked for 2 minutes. Complete purchase to confirm.',
-    card: {
-      _id: card._id,
-      cardNumber: card.cardNumber,
-      card: card.card,
-      lockExpiresAt: card.lockExpiresAt,
-    },
+    message: 'Card purchased successfully!',
+    card: result.card,
+    prizePool: result.prizePool,
   });
 };
 
