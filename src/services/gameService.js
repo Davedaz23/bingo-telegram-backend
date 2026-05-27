@@ -129,28 +129,31 @@ async function releaseCard(cardId, userId) {
       { _id: card.gameId },
       {
         $inc: { prizePool: -game.cardPrice },
-        $pull: { players: { cardId } },
+        $pull: { players: { cardId: card._id } },
       }
     );
 
     getIO().to(`game:${card.gameId}`).emit('card:released', { cardId, cardNumber: card.cardNumber });
     getIO().to(`game:${card.gameId}`).emit('card:purchased', { cardId, cardNumber: card.cardNumber, userId, refunded: true });
     logger.info(`User ${userId} refunded card ${card.cardNumber} in game ${game.gameCode}`);
-    return card;
+    return { released: true, game };
   }
 
   return null;
 }
 
 async function purchaseCard(gameId, cardId, userId) {
-  const game = await Game.findById(gameId);
+  let game = await Game.findById(gameId);
   if (!game) throw new AppError('Game not found', 404);
   if (game.status !== GAME_STATUS.SELECTION) {
     throw new AppError('Game is not accepting new players', 400);
   }
 
-  const alreadyIn = game.players.some(p => p.userId.toString() === userId.toString());
-  if (alreadyIn) throw new AppError('You already have a card in this game', 400);
+  const existingEntry = game.players.find(p => p.userId.toString() === userId.toString());
+  if (existingEntry) {
+    await releaseCard(existingEntry.cardId.toString(), userId);
+    game = await Game.findById(gameId);
+  }
 
   const card = await BingoCard.findOneAndUpdate(
     {
