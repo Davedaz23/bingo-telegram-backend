@@ -20,24 +20,27 @@ function generateGameCode() {
  * If none, create one with 400 cards.
  */
 async function ensureSelectionGame() {
-  let game = await Game.findOne({ status: GAME_STATUS.SELECTION }).sort({ createdAt: -1 });
-  if (!game) {
-    game = await Game.create({
-      gameCode: generateGameCode(),
-      cardPrice: GAME_CONFIG.CARD_PRICE,
-      platformFeePercent: GAME_CONFIG.PLATFORM_FEE_PERCENT,
-      winPattern: 'any_line',
-      maxPlayers: GAME_CONFIG.MAX_PLAYERS,
-      minPlayers: GAME_CONFIG.MIN_PLAYERS,
-      drawIntervalMs: GAME_CONFIG.NUMBER_DRAW_INTERVAL_MS,
-      drawSequence: generateDrawSequence(),
-      status: GAME_STATUS.SELECTION,
-    });
+  const activeGame = await Game.findOne({
+    status: { $in: [GAME_STATUS.SELECTION, GAME_STATUS.STARTING, GAME_STATUS.ACTIVE] },
+  }).sort({ createdAt: -1 });
 
-    await generateCardsForGame(game._id, GAME_CONFIG.CARDS_PER_GAME);
-    logger.info(`Auto-created selection game: ${game.gameCode} with ${GAME_CONFIG.CARDS_PER_GAME} cards`);
-    getIO().emit('game:new', { gameId: game._id, gameCode: game.gameCode, cardPrice: game.cardPrice });
-  }
+  if (activeGame) return activeGame;
+
+  const game = await Game.create({
+    gameCode: generateGameCode(),
+    cardPrice: GAME_CONFIG.CARD_PRICE,
+    platformFeePercent: GAME_CONFIG.PLATFORM_FEE_PERCENT,
+    winPattern: 'any_line',
+    maxPlayers: GAME_CONFIG.MAX_PLAYERS,
+    minPlayers: GAME_CONFIG.MIN_PLAYERS,
+    drawIntervalMs: GAME_CONFIG.NUMBER_DRAW_INTERVAL_MS,
+    drawSequence: generateDrawSequence(),
+    status: GAME_STATUS.SELECTION,
+  });
+
+  await generateCardsForGame(game._id, GAME_CONFIG.CARDS_PER_GAME);
+  logger.info(`Auto-created selection game: ${game.gameCode} with ${GAME_CONFIG.CARDS_PER_GAME} cards`);
+  getIO().emit('game:new', { gameId: game._id, gameCode: game.gameCode, cardPrice: game.cardPrice });
   return game;
 }
 
@@ -65,8 +68,10 @@ async function ensureNextGameOnFinish(finishedGameId) {
   const finished = await Game.findById(finishedGameId);
   if (!finished) return;
 
-  const existingSelection = await Game.findOne({ status: GAME_STATUS.SELECTION });
-  if (existingSelection) return;
+  const activeGame = await Game.findOne({
+    status: { $in: [GAME_STATUS.SELECTION, GAME_STATUS.STARTING, GAME_STATUS.ACTIVE] },
+  });
+  if (activeGame) return;
 
   const game = await Game.create({
     gameCode: generateGameCode(),
