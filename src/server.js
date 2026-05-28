@@ -6,6 +6,7 @@ const connectDB = require('./config/database');
 const logger = require('./utils/logger');
 const { startGameScheduler } = require('./services/gameScheduler');
 const { ensureSelectionGame } = require('./services/gameService');
+const { initTelegramBot } = require('./services/telegramBot');
 
 const PORT = process.env.PORT || 6000;
 
@@ -29,6 +30,10 @@ async function startServer() {
     // Start game scheduler (cron jobs)
     startGameScheduler();
     logger.info('✅ Game scheduler started');
+
+    // Initialize Telegram bot
+    await initTelegramBot();
+    logger.info('✅ Telegram bot initialized');
 
     server.listen(PORT, () => {
       logger.info(`🚀 Bingo server running on port ${PORT} [${process.env.NODE_ENV}]`);
