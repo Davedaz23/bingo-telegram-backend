@@ -3,10 +3,11 @@ const User = require('../models/User');
 const Game = require('../models/Game');
 const Transaction = require('../models/Transaction');
 const { getIO } = require('../socket/socketManager');
-const { ROLES, GAME_STATUS, WITHDRAWAL_STATUS, DEPOSIT_STATUS } = require('../config/constants');
+const { ROLES, GAME_STATUS } = require('../config/constants');
 const logger = require('../utils/logger');
 
 let bot = null;
+const MINI_APP_URL = process.env.MINI_APP_URL || 'https://bingo-telegram-frontend.vercel.app';
 
 function getRoleLabel(role) {
   const labels = { user: '👤 User', admin: '🛠 Admin', super_admin: '⭐ Super Admin' };
@@ -22,17 +23,43 @@ function getCommands(role) {
   ];
   if ([ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(role)) {
     cmds.push({ cmd: '/stats', desc: 'System statistics' });
-    cmds.push({ cmd: '/broadcast <message>', desc: 'Broadcast message to all users' });
+    cmds.push({ cmd: '/broadcast', desc: 'Broadcast message to all users' });
   }
   if (role === ROLES.SUPER_ADMIN) {
-    cmds.push({ cmd: '/add_admin <telegram_id>', desc: 'Promote user to admin' });
-    cmds.push({ cmd: '/remove_admin <telegram_id>', desc: 'Demote admin to user' });
+    cmds.push({ cmd: '/add_admin', desc: 'Promote user to admin' });
+    cmds.push({ cmd: '/remove_admin', desc: 'Demote admin to user' });
+  }
+  return cmds;
+}
+
+function getBotCommandObjects(role) {
+  const cmds = [
+    { command: 'start', description: 'Welcome & command list' },
+    { command: 'help', description: 'Show available commands' },
+    { command: 'balance', description: 'Check your balance' },
+    { command: 'profile', description: 'View your profile' },
+  ];
+  if ([ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(role)) {
+    cmds.push({ command: 'stats', description: 'System statistics' });
+    cmds.push({ command: 'broadcast', description: 'Broadcast message to all users' });
+  }
+  if (role === ROLES.SUPER_ADMIN) {
+    cmds.push({ command: 'add_admin', description: 'Promote user to admin' });
+    cmds.push({ command: 'remove_admin', description: 'Demote admin to user' });
   }
   return cmds;
 }
 
 function formatCommands(commands) {
   return commands.map(c => `${c.cmd} — ${c.desc}`).join('\n');
+}
+
+function playNowKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🎮 Play Now', web_app: { url: MINI_APP_URL } }],
+    ],
+  };
 }
 
 function isAdmin(user) {
@@ -64,12 +91,23 @@ async function ensureUser(telegramUser) {
   return user;
 }
 
+async function setUserCommands(chatId, role) {
+  try {
+    await bot.setMyCommands(getBotCommandObjects(role), {
+      scope: { type: 'chat', chat_id: chatId },
+    });
+  } catch (err) {
+    logger.warn(`Bot: failed to set commands for chat ${chatId}:`, err.message);
+  }
+}
+
 async function handleStart(msg) {
   const chatId = msg.chat.id;
   const from = msg.from;
   if (!from) return;
 
   const user = await ensureUser(from);
+  await setUserCommands(chatId, user.role);
   const commands = getCommands(user.role);
 
   await bot.sendMessage(chatId,
@@ -77,7 +115,10 @@ async function handleStart(msg) {
     `Welcome, *${user.firstName}*!\n` +
     `Role: ${getRoleLabel(user.role)}\n\n` +
     `*Available Commands:*\n${formatCommands(commands)}`,
-    { parse_mode: 'Markdown' }
+    {
+      parse_mode: 'Markdown',
+      reply_markup: playNowKeyboard(),
+    }
   );
 }
 
@@ -91,7 +132,10 @@ async function handleHelp(msg) {
 
   await bot.sendMessage(chatId,
     `*Available Commands:*\n${formatCommands(commands)}`,
-    { parse_mode: 'Markdown' }
+    {
+      parse_mode: 'Markdown',
+      reply_markup: playNowKeyboard(),
+    }
   );
 }
 
@@ -102,7 +146,9 @@ async function handleBalance(msg) {
 
   const user = await findUserByTelegramId(from.id);
   if (!user) {
-    await bot.sendMessage(chatId, 'You are not registered. Send /start first.');
+    await bot.sendMessage(chatId, 'You are not registered. Send /start first.', {
+      reply_markup: playNowKeyboard(),
+    });
     return;
   }
 
@@ -110,7 +156,10 @@ async function handleBalance(msg) {
     `💰 *Balance*\n\nYour balance: *${user.balance.toFixed(2)} Birr*\n` +
     `Total deposited: ${user.totalDeposited.toFixed(2)} Birr\n` +
     `Total won: ${user.totalWon.toFixed(2)} Birr`,
-    { parse_mode: 'Markdown' }
+    {
+      parse_mode: 'Markdown',
+      reply_markup: playNowKeyboard(),
+    }
   );
 }
 
@@ -121,7 +170,9 @@ async function handleProfile(msg) {
 
   const user = await findUserByTelegramId(from.id);
   if (!user) {
-    await bot.sendMessage(chatId, 'You are not registered. Send /start first.');
+    await bot.sendMessage(chatId, 'You are not registered. Send /start first.', {
+      reply_markup: playNowKeyboard(),
+    });
     return;
   }
 
@@ -134,7 +185,10 @@ async function handleProfile(msg) {
     `Games Played: ${user.gamesPlayed}\n` +
     `Games Won: ${user.gamesWon}\n` +
     `Joined: ${new Date(user.createdAt).toLocaleDateString()}`,
-    { parse_mode: 'Markdown' }
+    {
+      parse_mode: 'Markdown',
+      reply_markup: playNowKeyboard(),
+    }
   );
 }
 
@@ -179,9 +233,9 @@ async function handleBroadcast(msg, text) {
     return;
   }
 
-  const message = text.trim();
+  const message = text ? text.trim() : '';
   if (!message) {
-    await bot.sendMessage(chatId, 'Usage: /broadcast <message>');
+    await bot.sendMessage(chatId, 'Usage: /broadcast <message>\n\nExample:\n/broadcast Game starting in 5 minutes!');
     return;
   }
 
@@ -209,7 +263,7 @@ async function handleAddAdmin(msg, text) {
     return;
   }
 
-  const targetId = text.trim();
+  const targetId = text ? text.trim() : '';
   if (!targetId) {
     await bot.sendMessage(chatId, 'Usage: /add_admin <telegram_id>');
     return;
@@ -243,7 +297,7 @@ async function handleRemoveAdmin(msg, text) {
     return;
   }
 
-  const targetId = text.trim();
+  const targetId = text ? text.trim() : '';
   if (!targetId) {
     await bot.sendMessage(chatId, 'Usage: /remove_admin <telegram_id>');
     return;
@@ -264,6 +318,14 @@ async function handleRemoveAdmin(msg, text) {
   await target.save();
   logger.info(`Bot: ${from.id} demoted ${targetId} from admin`);
   await bot.sendMessage(chatId, `✅ *${target.firstName}* demoted to User.`, { parse_mode: 'Markdown' });
+}
+
+async function handleTextMessage(msg) {
+  if (!msg.text || msg.text.startsWith('/')) return;
+  const chatId = msg.chat.id;
+  await bot.sendMessage(chatId, 'Use the button below to open the game:', {
+    reply_markup: playNowKeyboard(),
+  });
 }
 
 async function initTelegramBot() {
@@ -290,6 +352,33 @@ async function initTelegramBot() {
     return null;
   }
 
+  // Set default bot commands (visible to users without a personal scope)
+  try {
+    await bot.setMyCommands([
+      { command: 'start', description: 'Welcome & command list' },
+      { command: 'help', description: 'Show available commands' },
+      { command: 'balance', description: 'Check your balance' },
+      { command: 'profile', description: 'View your profile' },
+    ]);
+    logger.info('✅ Default bot commands set');
+  } catch (err) {
+    logger.warn('Failed to set default commands:', err.message);
+  }
+
+  // Set the Menu Button to open the Mini App
+  try {
+    await bot.setChatMenuButton({
+      menu_button: {
+        type: 'web_app',
+        text: '🎮 Play Now',
+        web_app: { url: MINI_APP_URL },
+      },
+    });
+    logger.info(`✅ Menu button set to Mini App: ${MINI_APP_URL}`);
+  } catch (err) {
+    logger.warn('Failed to set menu button:', err.message);
+  }
+
   bot.onText(/\/start/, async (msg) => {
     try { await handleStart(msg); } catch (err) { logger.error('Bot /start error:', err); }
   });
@@ -310,8 +399,8 @@ async function initTelegramBot() {
     try { await handleStats(msg); } catch (err) { logger.error('Bot /stats error:', err); }
   });
 
-  bot.onText(/\/broadcast (.+)/, async (msg, match) => {
-    try { await handleBroadcast(msg, match[1]); } catch (err) { logger.error('Bot /broadcast error:', err); }
+  bot.onText(/\/broadcast(?: (.+))?/, async (msg, match) => {
+    try { await handleBroadcast(msg, match ? match[1] : ''); } catch (err) { logger.error('Bot /broadcast error:', err); }
   });
 
   bot.onText(/\/add_admin (.+)/, async (msg, match) => {
@@ -320,6 +409,17 @@ async function initTelegramBot() {
 
   bot.onText(/\/remove_admin (.+)/, async (msg, match) => {
     try { await handleRemoveAdmin(msg, match[1]); } catch (err) { logger.error('Bot /remove_admin error:', err); }
+  });
+
+  // Non-command text messages → prompt to Play Now
+  bot.on('message', async (msg) => {
+    try {
+      if (msg.text && !msg.text.startsWith('/')) {
+        await handleTextMessage(msg);
+      }
+    } catch (err) {
+      // ignore
+    }
   });
 
   return bot;
