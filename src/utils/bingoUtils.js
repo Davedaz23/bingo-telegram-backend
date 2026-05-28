@@ -10,7 +10,9 @@ function generateBingoCard() {
 
   columns.forEach((col) => {
     const { min, max } = BINGO_COLUMNS[col];
-    card[col] = getUniqueRandomNumbers(min, max, 5);
+    const nums = getUniqueRandomNumbers(min, max, 5);
+    nums.sort((a, b) => a - b);
+    card[col] = nums;
   });
 
   // Center square is FREE space
