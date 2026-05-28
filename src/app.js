@@ -64,11 +64,18 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Stricter limiter for sensitive endpoints
+// Stricter limiter for sensitive endpoints (payments, withdrawals)
 const strictLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
   message: { success: false, message: 'Too many requests on this endpoint.' },
+});
+
+// Moderate limiter for auth (more generous — Telegram Mini App can trigger many loads)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { success: false, message: 'Too many auth requests, please try again later.' },
 });
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
@@ -77,7 +84,7 @@ app.get('/health', (req, res) => {
 });
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
-app.use('/api/auth', strictLimiter, authRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/games', gameRoutes);
 app.use('/api/cards', cardRoutes);
