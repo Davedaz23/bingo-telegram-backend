@@ -222,7 +222,7 @@ async function purchaseCard(gameId, cardId, userId) {
   logger.info(`User ${userId} purchased card ${card.cardNumber} in game ${game.gameCode}`);
 
   if (updatedGame.players.length >= 2 && game.status === GAME_STATUS.SELECTION) {
-    await startGameCountdown(gameId);
+    scheduleCountdown(gameId);
   }
 
   return { card, prizePool: updatedGame.prizePool };
@@ -279,6 +279,25 @@ async function activateGame(gameId) {
 }
 
 const drawIntervals = new Map();
+const pendingCountdowns = new Map();
+
+function scheduleCountdown(gameId) {
+  clearScheduledCountdown(gameId);
+  const timeout = setTimeout(() => {
+    pendingCountdowns.delete(gameId.toString());
+    startGameCountdown(gameId);
+  }, 30000);
+  pendingCountdowns.set(gameId.toString(), timeout);
+  logger.info(`Countdown scheduled for game ${gameId} (30s delay)`);
+}
+
+function clearScheduledCountdown(gameId) {
+  const existing = pendingCountdowns.get(gameId.toString());
+  if (existing) {
+    clearTimeout(existing);
+    pendingCountdowns.delete(gameId.toString());
+  }
+}
 
 function scheduleNumberDraw(gameId, intervalMs) {
   if (drawIntervals.has(gameId.toString())) {
@@ -354,6 +373,7 @@ async function claimBingo(gameId, userId) {
 
     clearInterval(drawIntervals.get(gameId.toString()));
     drawIntervals.delete(gameId.toString());
+    clearScheduledCountdown(gameId);
 
     const { winnerPrize, platformFee } = calculatePrize(game.prizePool, game.platformFeePercent);
     const winningNumber = game.drawnNumbers[game.drawnNumbers.length - 1];
@@ -426,6 +446,7 @@ async function claimBingo(gameId, userId) {
 }
 
 async function cancelAndRefund(gameId, reason = 'Game cancelled') {
+  clearScheduledCountdown(gameId);
   const session = await mongoose.startSession();
   session.startTransaction();
 
