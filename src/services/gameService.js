@@ -286,9 +286,9 @@ function scheduleCountdown(gameId) {
   const timeout = setTimeout(() => {
     pendingCountdowns.delete(gameId.toString());
     startGameCountdown(gameId);
-  }, 500);
+  }, 60000);
   pendingCountdowns.set(gameId.toString(), timeout);
-  logger.info(`Countdown scheduled for game ${gameId} (30s delay)`);
+  logger.info(`Countdown scheduled for game ${gameId} (60s delay)`);
 }
 
 function clearScheduledCountdown(gameId) {
