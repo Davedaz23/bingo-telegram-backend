@@ -49,7 +49,9 @@ exports.getGameCards = async (req, res) => {
   const cards = await BingoCard.find({
     gameId: req.params.id,
     status: { $in: ['available', 'selected', 'purchased'] },
-  }).select('cardNumber status lockedBy ownerId card');
+  })
+    .select('cardNumber status lockedBy ownerId card')
+    .sort({ cardNumber: 1 });
 
   const sanitized = cards.map(c => ({
     _id: c._id,
