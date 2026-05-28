@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const Game = require('../models/Game');
 const BingoCard = require('../models/BingoCard');
-const { ensureSelectionGame, cancelAndRefund } = require('./gameService');
+const { ensureSelectionGame, cancelAndRefund, releaseCard } = require('./gameService');
 const { GAME_STATUS, CARD_STATUS } = require('../config/constants');
 const logger = require('../utils/logger');
 
@@ -38,6 +38,27 @@ function startGameScheduler() {
       }
     } catch (err) {
       logger.error('Lock cleanup error:', err);
+    }
+  });
+
+  // Every minute: refund single-player games stuck longer than 2 minutes
+  cron.schedule('* * * * *', async () => {
+    try {
+      const cutoff = new Date(Date.now() - 2 * 60 * 1000);
+      const staleGames = await Game.find({
+        status: GAME_STATUS.SELECTION,
+        updatedAt: { $lt: cutoff },
+        $expr: { $eq: [{ $size: '$players' }, 1] },
+      });
+      for (const game of staleGames) {
+        const player = game.players[0];
+        if (player && player.cardId) {
+          logger.warn(`Releasing card ${player.cardId} from single idle player in game ${game.gameCode}`);
+          await releaseCard(player.cardId.toString(), player.userId.toString());
+        }
+      }
+    } catch (err) {
+      logger.error('Single-player cleanup error:', err);
     }
   });
 

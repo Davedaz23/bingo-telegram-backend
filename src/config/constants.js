@@ -63,7 +63,7 @@ module.exports = {
     CARD_PRICE: parseFloat(process.env.CARD_PRICE) || 10,
     PLATFORM_FEE_PERCENT: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 20,
     NUMBER_DRAW_INTERVAL_MS: 5000,
-    START_COUNTDOWN_SECONDS: 30,
+    START_COUNTDOWN_SECONDS: 8,
     SELECTION_TIMEOUT_SECONDS: 120, // wait up to 2 min for 2nd player after first selection
     REFUND_TIMEOUT_MINUTES: parseInt(process.env.REFUND_TIMEOUT_MINUTES) || 5,
   },
