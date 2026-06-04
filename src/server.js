@@ -5,7 +5,7 @@ const { initSocket } = require('./socket/socketManager');
 const connectDB = require('./config/database');
 const logger = require('./utils/logger');
 const { startGameScheduler } = require('./services/gameScheduler');
-const { ensureSelectionGame } = require('./services/gameService');
+const { ensureSelectionGame, startGameSync } = require('./services/gameService');
 const { initTelegramBot } = require('./services/telegramBot');
 
 const PORT = process.env.PORT || 6000;
@@ -30,6 +30,10 @@ async function startServer() {
     // Start game scheduler (cron jobs)
     startGameScheduler();
     logger.info('✅ Game scheduler started');
+
+    // Start 5-second game sync heartbeat
+    startGameSync();
+    logger.info('✅ Game sync heartbeat started');
 
     // Initialize Telegram bot
     await initTelegramBot();

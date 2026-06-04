@@ -542,6 +542,49 @@ async function generateCardsForGame(gameId, count = 400) {
   logger.info(`Generated ${count} cards for game ${gameId}`);
 }
 
+// ─── Global 5-second sync heartbeat ─────────────────────────────────────────
+let gameSyncInterval = null;
+
+function startGameSync() {
+  if (gameSyncInterval) clearInterval(gameSyncInterval);
+
+  gameSyncInterval = setInterval(async () => {
+    try {
+      const games = await Game.find({
+        status: { $in: [GAME_STATUS.SELECTION, GAME_STATUS.STARTING, GAME_STATUS.ACTIVE] },
+      }).select('status players prizePool drawnNumbers countdownStartedAt gameCode');
+
+      for (const game of games) {
+        const syncData = {
+          gameId: game._id.toString(),
+          gameCode: game.gameCode,
+          status: game.status,
+          playerCount: game.players.length,
+          prizePool: game.prizePool,
+          drawnNumbers: game.drawnNumbers || [],
+        };
+
+        if (game.countdownStartedAt) {
+          const elapsed = (Date.now() - new Date(game.countdownStartedAt).getTime()) / 1000;
+          if (game.status === GAME_STATUS.SELECTION) {
+            syncData.countdownRemaining = Math.max(0, GAME_CONFIG.SELECTION_COUNTDOWN_SECONDS - elapsed);
+            syncData.phase = 'selection';
+          } else if (game.status === GAME_STATUS.STARTING) {
+            syncData.countdownRemaining = Math.max(0, GAME_CONFIG.START_COUNTDOWN_SECONDS - elapsed);
+            syncData.phase = 'starting';
+          }
+        }
+
+        getIO().to(`game:${game._id}`).emit('game:sync', syncData);
+      }
+    } catch (err) {
+      logger.error('Game sync error:', err);
+    }
+  }, 5000);
+
+  logger.info('Game sync heartbeat started (5s interval)');
+}
+
 module.exports = {
   ensureSelectionGame,
   createGame,
@@ -557,4 +600,5 @@ module.exports = {
   cancelAndRefund,
   generateCardsForGame,
   drawIntervals,
+  startGameSync,
 };
