@@ -54,33 +54,39 @@ function cardToGrid(card) {
 
 /**
  * Check if a card has BINGO given the called numbers
- * Supports: any_line (row, col, diagonal), four_corners, full_card
+ * Returns: { won: true, type, index } describing the winning line, or null
  */
 function checkBingo(card, calledNumbers, pattern = 'any_line') {
   const calledSet = new Set(calledNumbers);
   const grid = cardToGrid(card);
 
   if (pattern === 'full_card') {
-    return grid.every(row => row.every(cell => cell.number === 0 || calledSet.has(cell.number)));
+    const won = grid.every(row => row.every(cell => cell.number === 0 || calledSet.has(cell.number)));
+    return won ? { won: true, type: 'full_card' } : null;
   }
 
   if (pattern === 'four_corners') {
-    return (
+    const won = (
       isMarked(grid[0][0], calledSet) &&
       isMarked(grid[0][4], calledSet) &&
       isMarked(grid[4][0], calledSet) &&
       isMarked(grid[4][4], calledSet)
     );
+    return won ? { won: true, type: 'four_corners' } : null;
   }
 
   // any_line: check all rows
   for (let r = 0; r < 5; r++) {
-    if (grid[r].every(cell => isMarked(cell, calledSet))) return true;
+    if (grid[r].every(cell => isMarked(cell, calledSet))) {
+      return { won: true, type: 'row', index: r };
+    }
   }
 
   // check all columns
   for (let c = 0; c < 5; c++) {
-    if (grid.every(row => isMarked(row[c], calledSet))) return true;
+    if (grid.every(row => isMarked(row[c], calledSet))) {
+      return { won: true, type: 'column', index: c };
+    }
   }
 
   // check diagonals
@@ -90,7 +96,7 @@ function checkBingo(card, calledNumbers, pattern = 'any_line') {
     isMarked(grid[2][2], calledSet) &&
     isMarked(grid[3][3], calledSet) &&
     isMarked(grid[4][4], calledSet)
-  ) return true;
+  ) return { won: true, type: 'diagonal', index: 0 };
 
   if (
     isMarked(grid[0][4], calledSet) &&
@@ -98,9 +104,9 @@ function checkBingo(card, calledNumbers, pattern = 'any_line') {
     isMarked(grid[2][2], calledSet) &&
     isMarked(grid[3][1], calledSet) &&
     isMarked(grid[4][0], calledSet)
-  ) return true;
+  ) return { won: true, type: 'diagonal', index: 1 };
 
-  return false;
+  return null;
 }
 
 function isMarked(cell, calledSet) {

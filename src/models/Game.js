@@ -63,6 +63,10 @@ const gameSchema = new mongoose.Schema({
     winningNumber: Number,   // the number that completed bingo
     prizeAmount: Number,
     claimedAt: Date,
+    winningLine: {
+      type: { type: String, enum: ['row', 'column', 'diagonal', 'full_card', 'four_corners'] },
+      index: Number,
+    },
   },
 
   // Timing

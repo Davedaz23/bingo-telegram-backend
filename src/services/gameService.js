@@ -382,8 +382,8 @@ async function claimBingo(gameId, userId) {
     const card = await BingoCard.findById(player.cardId);
     if (!card) throw new AppError('Card not found', 404);
 
-    const hasBingo = checkBingo(card.card, game.drawnNumbers, game.winPattern);
-    if (!hasBingo) {
+    const bingoResult = checkBingo(card.card, game.drawnNumbers, game.winPattern);
+    if (!bingoResult) {
       throw new AppError('No valid BINGO on your card with the drawn numbers', 400);
     }
 
@@ -413,6 +413,7 @@ async function claimBingo(gameId, userId) {
           winningNumber,
           prizeAmount: winnerPrize,
           claimedAt: new Date(),
+          winningLine: { type: bingoResult.type, index: bingoResult.index },
         },
       },
       { session }
@@ -446,6 +447,8 @@ async function claimBingo(gameId, userId) {
       platformFee,
       drawnNumbers: game.drawnNumbers,
       winningNumber,
+      winningLine: { type: bingoResult.type, index: bingoResult.index },
+      winnerCard: card.card,
     });
 
     logger.info(`Game ${game.gameCode}: winner ${userId} won ${winnerPrize}`);
