@@ -7,6 +7,35 @@ const { GAME_STATUS, CARD_LOCK_TTL_SECONDS, ROLES } = require('../config/constan
 const logger = require('../utils/logger');
 const { releaseCard } = require('../services/gameService');
 
+// ─── Socket Event Rate Limiter ─────────────────────────────────────────────
+const eventTimestamps = new Map();
+const RATE_LIMITS = {
+  'game:join': { max: 3, window: 10000 },
+  'game:leave': { max: 5, window: 10000 },
+  'ping': { max: 3, window: 5000 },
+};
+
+function checkSocketRateLimit(socketId, event, maxRequests, windowMs) {
+  const key = `${socketId}:${event}`;
+  const now = Date.now();
+  const timestamps = eventTimestamps.get(key) || [];
+  const recent = timestamps.filter(t => now - t < windowMs);
+  if (recent.length >= maxRequests) return true;
+  recent.push(now);
+  eventTimestamps.set(key, recent);
+  return false;
+}
+
+// Cleanup stale rate-limit entries every 60s
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, timestamps] of eventTimestamps.entries()) {
+    const valid = timestamps.filter(t => now - t < 30000);
+    if (valid.length === 0) eventTimestamps.delete(key);
+    else eventTimestamps.set(key, valid);
+  }
+}, 60000).unref();
+
 let io;
 
 function initSocket(server) {
@@ -66,6 +95,15 @@ function initSocket(server) {
     const user = socket.user;
 
     logger.debug(`Socket connected: ${userId} (${user.firstName})`);
+
+    // ─── Event-level rate limiter middleware ──────────────────────────────────
+    socket.use(([event, ...args], next) => {
+      const limits = RATE_LIMITS[event];
+      if (limits && checkSocketRateLimit(socket.id, event, limits.max, limits.window)) {
+        return socket.emit('error', { message: 'Too many requests. Please slow down.' });
+      }
+      next();
+    });
 
     // Join personal room for notifications
     socket.join(`user:${userId}`);

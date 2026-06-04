@@ -49,6 +49,20 @@
 - `DepositRequest` model tracks the full flow
 - Admin routes: `GET /api/admin/deposits`, `POST /api/admin/deposits/:id/match`, `POST /api/admin/deposits/:id/confirm`
 
+## Socket.IO Notes
+
+- **Event rate limiting** in `socketManager.js`: `game:join` (3/10s), `game:leave` (5/10s), `ping` (3/5s) via `socket.use()` middleware
+- **`checkSocketRateLimit`** is a simple in-memory limiter per socket+event; stale entries cleaned every 60s
+- **Auth**: JWT preferred; initData fallback in socket middleware
+- **`disconnect`** handler releases all cards locked by that user
+
+## Frontend Notes (D:\Works\bingo-telegram-frontend)
+
+- **`useSocket()` hook** now returns `fresh` counter that increments on `visibilitychange` → visible
+- **`socket.ts`** exports `ensureSocketConnected()` (get-or-create) and `refreshSocket()` (hard reconnect)
+- **Countdown timers** use `Date.now()` end-time approach, not `setInterval` decrement, so they remain accurate after Telegram mini app is minimized and restored
+- **Visibility handling**: home page and game detail page re-fetch game+cards on `document.visibilitychange` → visible
+
 ## New/Modified Files in This Session
 
 - `src/routes/admin.routes.js` — added deposit management routes
