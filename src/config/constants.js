@@ -64,6 +64,7 @@ module.exports = {
     PLATFORM_FEE_PERCENT: parseFloat(process.env.PLATFORM_FEE_PERCENT) || 20,
     NUMBER_DRAW_INTERVAL_MS: 5000,
     START_COUNTDOWN_SECONDS: 8,
+    SELECTION_COUNTDOWN_SECONDS: 30, // countdown when 2nd player joins before game starts
     SELECTION_TIMEOUT_SECONDS: 120, // wait up to 2 min for 2nd player after first selection
     REFUND_TIMEOUT_MINUTES: parseInt(process.env.REFUND_TIMEOUT_MINUTES) || 5,
   },

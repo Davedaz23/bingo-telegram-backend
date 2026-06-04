@@ -221,8 +221,8 @@ async function purchaseCard(gameId, cardId, userId) {
 
   logger.info(`User ${userId} purchased card ${card.cardNumber} in game ${game.gameCode}`);
 
-  if (updatedGame.players.length >= 2 && game.status === GAME_STATUS.SELECTION) {
-    scheduleCountdown(gameId);
+  if (updatedGame.players.length >= 2 && game.status === GAME_STATUS.SELECTION && !updatedGame.countdownStartedAt) {
+    startSelectionCountdown(gameId);
   }
 
   return { card, prizePool: updatedGame.prizePool };
@@ -279,23 +279,39 @@ async function activateGame(gameId) {
 }
 
 const drawIntervals = new Map();
-const pendingCountdowns = new Map();
+const pendingSelectionTimers = new Map();
 
-function scheduleCountdown(gameId) {
-  clearScheduledCountdown(gameId);
-  const timeout = setTimeout(() => {
-    pendingCountdowns.delete(gameId.toString());
-    startGameCountdown(gameId);
-  }, 60000);
-  pendingCountdowns.set(gameId.toString(), timeout);
-  logger.info(`Countdown scheduled for game ${gameId} (60s delay)`);
+async function startSelectionCountdown(gameId) {
+  const game = await Game.findOneAndUpdate(
+    { _id: gameId, status: GAME_STATUS.SELECTION, countdownStartedAt: null },
+    { countdownStartedAt: new Date() },
+    { new: true }
+  );
+  if (!game) return;
+
+  getIO().to(`game:${gameId}`).emit('game:countdown', {
+    gameId,
+    seconds: GAME_CONFIG.SELECTION_COUNTDOWN_SECONDS,
+    playerCount: game.players.length,
+    prizePool: game.prizePool,
+    phase: 'selection',
+  });
+
+  logger.info(`Game ${game.gameCode}: selection countdown started (${GAME_CONFIG.SELECTION_COUNTDOWN_SECONDS}s)`);
+
+  const timer = setTimeout(async () => {
+    pendingSelectionTimers.delete(gameId.toString());
+    await startGameCountdown(gameId);
+  }, GAME_CONFIG.SELECTION_COUNTDOWN_SECONDS * 1000);
+
+  pendingSelectionTimers.set(gameId.toString(), timer);
 }
 
-function clearScheduledCountdown(gameId) {
-  const existing = pendingCountdowns.get(gameId.toString());
+function clearSelectionTimer(gameId) {
+  const existing = pendingSelectionTimers.get(gameId.toString());
   if (existing) {
     clearTimeout(existing);
-    pendingCountdowns.delete(gameId.toString());
+    pendingSelectionTimers.delete(gameId.toString());
   }
 }
 
@@ -373,7 +389,7 @@ async function claimBingo(gameId, userId) {
 
     clearInterval(drawIntervals.get(gameId.toString()));
     drawIntervals.delete(gameId.toString());
-    clearScheduledCountdown(gameId);
+    clearSelectionTimer(gameId);
 
     const { winnerPrize, platformFee } = calculatePrize(game.prizePool, game.platformFeePercent);
     const winningNumber = game.drawnNumbers[game.drawnNumbers.length - 1];
@@ -446,7 +462,7 @@ async function claimBingo(gameId, userId) {
 }
 
 async function cancelAndRefund(gameId, reason = 'Game cancelled') {
-  clearScheduledCountdown(gameId);
+  clearSelectionTimer(gameId);
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -533,6 +549,7 @@ module.exports = {
   selectCard,
   releaseCard,
   purchaseCard,
+  startSelectionCountdown,
   startGameCountdown,
   activateGame,
   drawNextNumber,
