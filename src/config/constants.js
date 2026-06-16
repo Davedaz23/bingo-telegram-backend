@@ -82,4 +82,6 @@ module.exports = {
     ADMIN: 'admin',
     SUPER_ADMIN: 'super_admin',
   },
+
+  REGISTRATION_BONUS: 20,
 };

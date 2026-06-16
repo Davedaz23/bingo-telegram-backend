@@ -30,7 +30,7 @@ exports.telegramLogin = async (req, res) => {
       lastName: telegramUser.last_name || null,
       languageCode: telegramUser.language_code || 'en',
       role,
-      balance: 50,
+      balance: 20,
     });
 
     await Transaction.create({
@@ -38,13 +38,13 @@ exports.telegramLogin = async (req, res) => {
       telegramId: user.telegramId,
       type: TRANSACTION_TYPE.DEPOSIT,
       status: TRANSACTION_STATUS.COMPLETED,
-      amount: 50,
+      amount: 20,
       balanceBefore: 0,
-      balanceAfter: 50,
-      description: 'Welcome bonus: 50 Birr',
+      balanceAfter: 20,
+      description: 'Welcome bonus: 20 Birr',
     });
 
-    logger.info(`New user via auth: ${telegramUser.id} (${role}) — 50 Birr welcome bonus`);
+    logger.info(`New user via auth: ${telegramUser.id} (${role}) — 20 Birr welcome bonus`);
   } else {
     if (!user.isActive) {
       return res.status(403).json({ success: false, message: 'Account suspended' });
