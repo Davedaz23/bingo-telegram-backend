@@ -19,6 +19,7 @@ router.get('/users', adminController.listUsers);
 router.post('/users/:userId/ban', adminController.banUser);
 router.post('/users/:userId/unban', adminController.unbanUser);
 router.post('/users/:userId/credit', adminController.manualCredit);
+router.delete('/users/:userId', adminController.deleteUser);
 
 // Game player management
 router.post('/games/:gameId/players/:userId/remove', adminController.removePlayerFromGame);
