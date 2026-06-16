@@ -5,14 +5,14 @@ const Game = require('../models/Game');
 const BingoCard = require('../models/BingoCard');
 const { GAME_STATUS, CARD_LOCK_TTL_SECONDS, ROLES } = require('../config/constants');
 const logger = require('../utils/logger');
-const { releaseCard } = require('../services/gameService');
 
 // ─── Socket Event Rate Limiter ─────────────────────────────────────────────
 const eventTimestamps = new Map();
 const RATE_LIMITS = {
-  'game:join': { max: 3, window: 10000 },
-  'game:leave': { max: 5, window: 10000 },
-  'ping': { max: 3, window: 5000 },
+  'game:join': { max: 20, window: 10000 },
+  'game:leave': { max: 20, window: 10000 },
+  'ping': { max: 30, window: 5000 },
+  'game:removePlayer': { max: 10, window: 10000 },
 };
 
 function checkSocketRateLimit(socketId, event, maxRequests, windowMs) {
@@ -137,6 +137,20 @@ function initSocket(server) {
       socket.leave(`game:${gameId}`);
     });
 
+    // ─── Admin: Remove Player from Game (via socket) ──────────────────────────
+    socket.on('game:removePlayer', async ({ gameId, targetUserId }) => {
+      if (![ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(user.role)) {
+        return socket.emit('error', { message: 'Admin only' });
+      }
+      try {
+        const { removeUserFromGame } = require('../services/gameService');
+        await removeUserFromGame(gameId, targetUserId, userId);
+        socket.emit('game:playerRemoved', { gameId, userId: targetUserId, success: true });
+      } catch (err) {
+        socket.emit('error', { message: err.message });
+      }
+    });
+
     // ─── Heartbeat ───────────────────────────────────────────────────────────
     socket.on('ping', () => {
       socket.emit('pong', { ts: Date.now() });
@@ -146,6 +160,7 @@ function initSocket(server) {
     socket.on('disconnect', async () => {
       logger.debug(`Socket disconnected: ${userId}`);
       try {
+        const { releaseCard } = require('../services/gameService');
         // Release any cards locked by this user
         const lockedCards = await BingoCard.find({
           lockedBy: userId,

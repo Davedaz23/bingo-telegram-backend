@@ -588,6 +588,74 @@ function startGameSync() {
   logger.info('Game sync heartbeat started (5s interval)');
 }
 
+async function removeUserFromGame(gameId, userId, adminId = null) {
+  const game = await Game.findById(gameId);
+  if (!game) throw new AppError('Game not found', 404);
+
+  const playerIndex = game.players.findIndex(p => p.userId.toString() === userId.toString());
+  if (playerIndex === -1) throw new AppError('User is not in this game', 400);
+
+  const player = game.players[playerIndex];
+  const card = await BingoCard.findById(player.cardId);
+
+  const isAdminAction = !!adminId;
+  const isSelectionPhase = game.status === GAME_STATUS.SELECTION;
+
+  if (card) {
+    if (isSelectionPhase) {
+      if (card.status === CARD_STATUS.PURCHASED) {
+        await creditBalance(userId, game.cardPrice, TRANSACTION_TYPE.REFUND, {
+          gameId,
+          cardId: card._id,
+          description: `Refund for leaving game ${game.gameCode} (${isAdminAction ? 'removed by admin' : 'voluntary leave'})`,
+        });
+      }
+      await BingoCard.updateOne(
+        { _id: card._id },
+        {
+          $set: {
+            status: CARD_STATUS.AVAILABLE,
+            ownerId: null,
+            ownerTelegramId: null,
+            purchasedAt: null,
+            lockedBy: null,
+            lockedAt: null,
+            lockExpiresAt: null,
+          },
+        }
+      );
+    } else {
+      await BingoCard.updateOne(
+        { _id: card._id },
+        { $set: { ownerId: null, ownerTelegramId: null } }
+      );
+    }
+  }
+
+  await Game.updateOne(
+    { _id: gameId },
+    {
+      $pull: { players: { userId } },
+      $inc: { prizePool: isSelectionPhase ? -game.cardPrice : 0 },
+    }
+  );
+
+  const updatedGame = await Game.findById(gameId).populate('players.userId', 'firstName username');
+
+  const eventName = isAdminAction ? 'game:playerRemoved' : 'game:playerLeft';
+  getIO().to(`game:${gameId}`).emit(eventName, {
+    gameId,
+    userId,
+    playerCount: updatedGame.players.length,
+    prizePool: updatedGame.prizePool,
+    byAdmin: isAdminAction,
+  });
+
+  logger.info(`User ${userId} ${isAdminAction ? 'removed from' : 'left'} game ${game.gameCode} (${isSelectionPhase ? 'selection' : game.status} phase)`);
+
+  return { game: updatedGame, refunded: isSelectionPhase };
+}
+
 module.exports = {
   ensureSelectionGame,
   createGame,
@@ -602,6 +670,7 @@ module.exports = {
   claimBingo,
   cancelAndRefund,
   generateCardsForGame,
+  removeUserFromGame,
   drawIntervals,
   startGameSync,
 };

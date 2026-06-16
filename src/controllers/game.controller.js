@@ -10,6 +10,7 @@ const {
   claimBingo,
   cancelAndRefund,
   generateCardsForGame,
+  removeUserFromGame,
 } = require('../services/gameService');
 const { GAME_STATUS } = require('../config/constants');
 const { AppError } = require('../middleware/errorHandler');
@@ -110,6 +111,14 @@ exports.claimBingo = async (req, res) => {
     prize: result.winnerPrize,
     platformFee: result.platformFee,
   });
+};
+
+/**
+ * POST /api/games/:id/leave - leave game voluntarily
+ */
+exports.leaveGame = async (req, res) => {
+  const result = await removeUserFromGame(req.params.id, req.userId);
+  res.json({ success: true, message: 'You have left the game', game: result.game, refunded: result.refunded });
 };
 
 /**

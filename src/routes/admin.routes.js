@@ -20,6 +20,9 @@ router.post('/users/:userId/ban', adminController.banUser);
 router.post('/users/:userId/unban', adminController.unbanUser);
 router.post('/users/:userId/credit', adminController.manualCredit);
 
+// Game player management
+router.post('/games/:gameId/players/:userId/remove', adminController.removePlayerFromGame);
+
 // Deposit management (SMS)
 router.get('/deposits', adminController.listDepositRequests);
 router.post('/deposits/:id/match', adminController.matchSmsDeposit);

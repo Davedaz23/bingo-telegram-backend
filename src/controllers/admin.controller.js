@@ -8,6 +8,7 @@ const {
   generateCardsForGame,
   startGameCountdown,
   cancelAndRefund,
+  removeUserFromGame,
 } = require('../services/gameService');
 const { matchAndConfirmDeposit, adminConfirmDeposit } = require('../services/paymentService');
 const { processWithdrawal, rejectWithdrawal } = require('../services/withdrawalService');
@@ -105,6 +106,12 @@ exports.manualCredit = async (req, res) => {
   });
 
   res.json({ success: true, message: `Credited ${amount} to user` });
+};
+
+exports.removePlayerFromGame = async (req, res) => {
+  const { gameId, userId } = req.params;
+  const result = await removeUserFromGame(gameId, userId, req.userId);
+  res.json({ success: true, message: 'Player removed from game', game: result.game, refunded: result.refunded });
 };
 
 // ─── Deposit Management (SMS) ─────────────────────────────────────────────────
