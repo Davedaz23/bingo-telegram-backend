@@ -3,8 +3,10 @@ const User = require('../models/User');
 const Game = require('../models/Game');
 const Transaction = require('../models/Transaction');
 const { getIO } = require('../socket/socketManager');
-const { ROLES, GAME_STATUS } = require('../config/constants');
+const { ROLES, GAME_STATUS, REGISTRATION_BONUS } = require('../config/constants');
 const logger = require('../utils/logger');
+const { creditBalance } = require('../services/walletService');
+const { TRANSACTION_TYPE } = require('../config/constants');
 
 let bot = null;
 const MINI_APP_URL = process.env.MINI_APP_URL || 'https://bingo-telegram-frontend.vercel.app';
@@ -58,6 +60,34 @@ function playNowKeyboard() {
   return {
     inline_keyboard: [
       [{ text: '🎮 Play Now', web_app: { url: MINI_APP_URL } }],
+      [
+        { text: '💰 Check Balance', callback_data: 'balance' },
+        { text: '👤 Profile', callback_data: 'profile' },
+      ],
+      [
+        { text: '📜 Transaction History', callback_data: 'history' },
+        { text: '❓ Help', callback_data: 'help' },
+      ],
+    ],
+  };
+}
+
+function mainMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🎮 Play Bingo', web_app: { url: MINI_APP_URL } }],
+      [
+        { text: '💰 Wallet', callback_data: 'wallet' },
+        { text: '👤 Profile', callback_data: 'profile' },
+      ],
+      [
+        { text: '📜 History', callback_data: 'history' },
+        { text: '🎁 Bonuses', callback_data: 'bonuses' },
+      ],
+      [
+        { text: '❓ Help & Rules', callback_data: 'help' },
+        { text: '📞 Support', callback_data: 'support' },
+      ],
     ],
   };
 }
@@ -87,6 +117,12 @@ async function ensureUser(telegramUser) {
       role,
     });
     logger.info(`Bot: auto-registered user ${telegramUser.id}`);
+
+    // Credit registration bonus
+    await creditBalance(user._id, REGISTRATION_BONUS, TRANSACTION_TYPE.DEPOSIT, {
+      description: 'Welcome bonus for new player',
+    });
+    logger.info(`Welcome bonus of ${REGISTRATION_BONUS} Birr credited to user ${user._id}`);
   }
   return user;
 }
@@ -110,16 +146,29 @@ async function handleStart(msg) {
   await setUserCommands(chatId, user.role);
   const commands = getCommands(user.role);
 
-  await bot.sendMessage(chatId,
-    `🎱 *Ato Bingo Bot*\n\n` +
-    `Welcome, *${user.firstName}*!\n` +
-    `Role: ${getRoleLabel(user.role)}\n\n` +
-    `*Available Commands:*\n${formatCommands(commands)}`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: playNowKeyboard(),
-    }
-  );
+  const isNewUser = user.totalDeposited === 0 && user.balance === REGISTRATION_BONUS;
+
+  let welcomeText = `🎱 *Ato Bingo* — Welcome${isNewUser ? ' Back' : ''}!\n\n`;
+  welcomeText += `👋 Hello *${user.firstName}*!\n`;
+  welcomeText += `💰 Your Balance: *${user.balance.toFixed(2)} Birr*\n\n`;
+
+  if (isNewUser) {
+    welcomeText += `🎉 *Welcome Bonus: +${REGISTRATION_BONUS} Birr!*\n`;
+    welcomeText += `Start playing and win real money!\n\n`;
+  }
+
+  welcomeText += `🎯 *How to Play:*\n`;
+  welcomeText += `1. Tap "Play Bingo" to open the game\n`;
+  welcomeText += `2. Select your card(s) - ${REGISTRATION_BONUS} Birr = 2 cards free!\n`;
+  welcomeText += `3. Wait for players to join (min 2)\n`;
+  welcomeText += `4. Numbers drawn every 5 seconds\n`;
+  welcomeText += `5. First BINGO wins the prize pool!\n\n`;
+  welcomeText += `💡 *Commands:*\n${formatCommands(commands)}`;
+
+  await bot.sendMessage(chatId, welcomeText, {
+    parse_mode: 'Markdown',
+    reply_markup: mainMenuKeyboard(),
+  });
 }
 
 async function handleHelp(msg) {
@@ -419,6 +468,121 @@ async function initTelegramBot() {
       }
     } catch (err) {
       // ignore
+    }
+  });
+
+  // Callback queries for inline keyboard
+  bot.on('callback_query', async (query) => {
+    const chatId = query.message.chat.id;
+    const from = query.from;
+    const data = query.data;
+
+    try {
+      await bot.answerCallbackQuery(query.id);
+
+      const user = await findUserByTelegramId(from.id);
+      if (!user) {
+        await bot.sendMessage(chatId, 'Please /start first to register.', { reply_markup: mainMenuKeyboard() });
+        return;
+      }
+
+      switch (data) {
+        case 'wallet':
+        case 'balance':
+          await bot.sendMessage(chatId,
+            `💰 *Wallet*\n\n` +
+            `Balance: *${user.balance.toFixed(2)} Birr*\n` +
+            `Total Deposited: ${user.totalDeposited.toFixed(2)} Birr\n` +
+            `Total Won: ${user.totalWon.toFixed(2)} Birr\n` +
+            `Total Withdrawn: ${user.totalWithdrawn.toFixed(2)} Birr`,
+            { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+          );
+          break;
+
+        case 'profile':
+          await bot.sendMessage(chatId,
+            `👤 *Profile*\n\n` +
+            `Name: ${user.firstName}${user.lastName ? ' ' + user.lastName : ''}\n` +
+            `Username: ${user.username || 'N/A'}\n` +
+            `Role: ${getRoleLabel(user.role)}\n` +
+            `Balance: ${user.balance.toFixed(2)} Birr\n` +
+            `Games Played: ${user.gamesPlayed}\n` +
+            `Games Won: ${user.gamesWon}\n` +
+            `Joined: ${new Date(user.createdAt).toLocaleDateString()}`,
+            { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+          );
+          break;
+
+        case 'history':
+          const transactions = await Transaction.find({ userId: user._id })
+            .sort({ createdAt: -1 })
+            .limit(10)
+            .lean();
+          if (transactions.length === 0) {
+            await bot.sendMessage(chatId,
+              `📜 *Transaction History*\n\nNo transactions yet.`,
+              { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+            );
+          } else {
+            let text = `📜 *Recent Transactions*\n\n`;
+            for (const tx of transactions) {
+              const sign = tx.amount >= 0 ? '+' : '';
+              const emoji = tx.type === 'deposit' ? '💰' : tx.type === 'withdrawal' ? '💸' : tx.type === 'game_win' ? '🏆' : tx.type === 'refund' ? '↩️' : '📝';
+              text += `${emoji} ${sign}${tx.amount.toFixed(2)} Birr — ${tx.description || tx.type}\n`;
+              text += `   ${new Date(tx.createdAt).toLocaleString()}\n\n`;
+            }
+            await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() });
+          }
+          break;
+
+        case 'bonuses':
+          await bot.sendMessage(chatId,
+            `🎁 *Bonuses & Rewards*\n\n` +
+            `🎉 *Welcome Bonus:* ${REGISTRATION_BONUS} Birr (one-time)\n` +
+            `💎 *Referral Bonus:* Coming soon!\n` +
+            `🏆 *Daily Login:* Coming soon!\n` +
+            `🎯 *Tournament Prizes:* Coming soon!\n\n` +
+            `Your welcome bonus: ${user.totalDeposited === REGISTRATION_BONUS ? '✅ Claimed' : '🎁 Ready to claim'}`,
+            { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+          );
+          break;
+
+        case 'help':
+          await bot.sendMessage(chatId,
+            `❓ *Help & Rules*\n\n` +
+            `🎮 *How to Play:*\n` +
+            `• Select cards during selection phase\n` +
+            `• Min 2 players to start\n` +
+            `• Numbers drawn every 5 seconds\n` +
+            `• First valid BINGO wins\n\n` +
+            `💳 *Payments:*\n` +
+            `• Deposit via SMS (CBE, Telebirr, Abyssinia)\n` +
+            `• Withdraw to bank/Mobile Money\n` +
+            `• Min withdrawal: 50 Birr\n\n` +
+            `🔒 *Fair Play:*\n` +
+            `• Provably fair RNG\n` +
+            `• Auto-refund if no winner\n\n` +
+            `📞 Need help? Contact @AtoBingoSupport`,
+            { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+          );
+          break;
+
+        case 'support':
+          await bot.sendMessage(chatId,
+            `📞 *Support*\n\n` +
+            `For issues with:\n` +
+            `• Deposits/Withdrawals\n` +
+            `• Game problems\n• Game bugs\n` +
+            `• Account issues\n\n` +
+            `💬 Contact: @AtoBingoSupport\n` +
+            `📧 Email: support@atobingo.com\n\n` +
+            `Response time: < 24 hours`,
+            { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+          );
+          break;
+      }
+    } catch (err) {
+      logger.error('Callback query error:', err);
     }
   });
 
