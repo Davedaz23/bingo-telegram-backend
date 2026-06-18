@@ -3,13 +3,11 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Withdrawal = require('../models/Withdrawal');
 const DepositRequest = require('../models/DepositRequest');
-const BingoCard = require('../models/BingoCard');
 const {
   createGame,
   generateCardsForGame,
   startGameCountdown,
   cancelAndRefund,
-  removeUserFromGame,
 } = require('../services/gameService');
 const { matchAndConfirmDeposit, adminConfirmDeposit } = require('../services/paymentService');
 const { processWithdrawal, rejectWithdrawal } = require('../services/withdrawalService');
@@ -107,48 +105,6 @@ exports.manualCredit = async (req, res) => {
   });
 
   res.json({ success: true, message: `Credited ${amount} to user` });
-};
-
-exports.deleteUser = async (req, res) => {
-  const { userId } = req.params;
-  const user = await User.findById(userId);
-  if (!user) throw new AppError('User not found', 404);
-
-  const mongoose = require('mongoose');
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    await BingoCard.deleteMany({ ownerId: userId }).session(session);
-    await BingoCard.deleteMany({ lockedBy: userId }).session(session);
-
-    await Game.updateMany(
-      { 'players.userId': userId },
-      { $pull: { players: { userId } }, $inc: { prizePool: -10 } },
-      { session }
-    ).catch(() => {});
-
-    await Transaction.deleteMany({ userId }).session(session);
-    await Withdrawal.deleteMany({ userId }).session(session);
-    await DepositRequest.deleteMany({ userId }).session(session);
-
-    await User.findByIdAndDelete(userId).session(session);
-
-    await session.commitTransaction();
-
-    res.json({ success: true, message: 'User deleted permanently' });
-  } catch (err) {
-    await session.abortTransaction();
-    throw err;
-  } finally {
-    session.endSession();
-  }
-};
-
-exports.removePlayerFromGame = async (req, res) => {
-  const { gameId, userId } = req.params;
-  const result = await removeUserFromGame(gameId, userId, req.userId);
-  res.json({ success: true, message: 'Player removed from game', game: result.game, refunded: result.refunded });
 };
 
 // ─── Deposit Management (SMS) ─────────────────────────────────────────────────
