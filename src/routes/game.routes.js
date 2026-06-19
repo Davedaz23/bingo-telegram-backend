@@ -12,6 +12,7 @@ router.get('/:id/cards', gameController.getGameCards);
 router.post('/:id/cards/:cardId/select', gameController.selectCard);
 router.post('/:id/cards/:cardId/release', gameController.releaseCard);
 router.post('/:id/cards/:cardId/purchase', gameController.purchaseCard);
+router.post('/:id/cards/:cardId/mark', gameController.markNumber);
 router.post('/:id/bingo', gameController.claimBingo);
 router.post('/:id/leave', gameController.leaveGame);
 

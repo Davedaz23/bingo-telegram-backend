@@ -51,7 +51,7 @@ exports.getGameCards = async (req, res) => {
     gameId: req.params.id,
     status: { $in: ['available', 'selected', 'purchased'] },
   })
-    .select('cardNumber status lockedBy ownerId card')
+    .select('cardNumber status lockedBy ownerId card markedNumbers')
     .sort({ cardNumber: 1 });
 
   const sanitized = cards.map(c => ({
@@ -61,6 +61,7 @@ exports.getGameCards = async (req, res) => {
     isOwnedByMe: c.ownerId?.toString() === req.userId,
     isLockedByMe: c.lockedBy?.toString() === req.userId,
     card: c.ownerId?.toString() === req.userId || c.lockedBy?.toString() === req.userId ? c.card : null,
+    markedNumbers: c.ownerId?.toString() === req.userId ? c.markedNumbers : undefined,
   }));
 
   res.json({ success: true, cards: sanitized });
@@ -115,6 +116,20 @@ exports.claimBingo = async (req, res) => {
 /**
  * POST /api/games/:id/leave - leave game voluntarily
  */
+exports.markNumber = async (req, res) => {
+  const { numbers } = req.body;
+  if (!Array.isArray(numbers)) throw new AppError('numbers array required', 400);
+
+  const card = await BingoCard.findOneAndUpdate(
+    { _id: req.params.cardId, gameId: req.params.id, ownerId: req.userId },
+    { $set: { markedNumbers: numbers } },
+    { new: true }
+  );
+  if (!card) throw new AppError('Card not found or not owned by you', 404);
+
+  res.json({ success: true, markedNumbers: card.markedNumbers });
+};
+
 exports.leaveGame = async (req, res) => {
   const result = await removeUserFromGame(req.params.id, req.userId);
   res.json({ success: true, message: 'You have left the game', game: result.game, refunded: result.refunded });
