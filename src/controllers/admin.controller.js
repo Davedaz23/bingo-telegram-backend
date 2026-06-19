@@ -15,6 +15,7 @@ const { creditBalance } = require('../services/walletService');
 const { GAME_STATUS, TRANSACTION_TYPE, WITHDRAWAL_STATUS, DEPOSIT_STATUS } = require('../config/constants');
 const { AppError } = require('../middleware/errorHandler');
 const { getWelcomeBonus, setWelcomeBonus } = require('../services/settingService');
+const logger = require('../utils/logger');
 
 // ─── Game Management ──────────────────────────────────────────────────────────
 
@@ -106,6 +107,28 @@ exports.manualCredit = async (req, res) => {
   });
 
   res.json({ success: true, message: `Credited ${amount} to user` });
+};
+
+exports.deleteUser = async (req, res) => {
+  const user = await User.findByIdAndDelete(req.params.userId);
+  if (!user) throw new AppError('User not found', 404);
+  logger.info(`Admin ${req.userId} deleted user ${req.params.userId}`);
+  res.json({ success: true, message: 'User deleted' });
+};
+
+exports.removePlayerFromGame = async (req, res) => {
+  const game = await Game.findById(req.params.gameId);
+  if (!game) throw new AppError('Game not found', 404);
+
+  const playerIndex = game.players.findIndex(p => p.userId.toString() === req.params.userId);
+  if (playerIndex === -1) throw new AppError('Player not found in game', 404);
+
+  game.players.splice(playerIndex, 1);
+  game.playerCount = game.players.length;
+  await game.save();
+
+  logger.info(`Admin ${req.userId} removed player ${req.params.userId} from game ${req.params.gameId}`);
+  res.json({ success: true, message: 'Player removed from game' });
 };
 
 // ─── Deposit Management (SMS) ─────────────────────────────────────────────────
