@@ -91,7 +91,18 @@ async function ensureNextGameOnFinish(finishedGameId) {
 }
 
 async function selectCard(gameId, cardId, userId) {
-  return purchaseCard(gameId, cardId, userId);
+  const game = await Game.findById(gameId);
+  if (!game) throw new AppError('Game not found', 404);
+  if (game.status !== GAME_STATUS.SELECTION) {
+    throw new AppError('Game is not accepting new players', 400);
+  }
+
+  const card = await BingoCard.tryLock(cardId, userId, CARD_LOCK_TTL_SECONDS);
+  if (!card) throw new AppError('Card is no longer available', 409);
+
+  getIO().to(`game:${gameId}`).emit('card:selected', { cardId, cardNumber: card.cardNumber, userId });
+
+  return { card };
 }
 
 async function releaseCard(cardId, userId) {
@@ -160,26 +171,29 @@ async function purchaseCard(gameId, cardId, userId) {
     game = await Game.findById(gameId);
   }
 
-  const card = await BingoCard.findOneAndUpdate(
-    {
-      _id: cardId,
-      gameId,
-      status: CARD_STATUS.AVAILABLE,
-    },
-    {
-      $set: {
-        status: CARD_STATUS.PURCHASED,
-        ownerId: userId,
-        purchasedAt: new Date(),
+  // Try to confirm an existing lock (selected → purchased)
+  let card = await BingoCard.confirmPurchase(cardId, userId);
+
+  // If no lock exists, fall back to direct purchase (available → purchased)
+  if (!card) {
+    card = await BingoCard.findOneAndUpdate(
+      { _id: cardId, gameId, status: CARD_STATUS.AVAILABLE },
+      {
+        $set: {
+          status: CARD_STATUS.PURCHASED,
+          ownerId: userId,
+          purchasedAt: new Date(),
+        },
       },
-    },
-    { new: true }
-  );
+      { new: true }
+    );
+  }
+
   if (!card) throw new AppError('Card is no longer available', 409);
 
   const user = await User.findById(userId);
   if (!user) {
-    await BingoCard.updateOne({ _id: cardId }, { $set: { status: CARD_STATUS.AVAILABLE, ownerId: null, purchasedAt: null } });
+    await BingoCard.updateOne({ _id: cardId }, { $set: { status: CARD_STATUS.AVAILABLE, ownerId: null, purchasedAt: null, lockedBy: null, lockedAt: null, lockExpiresAt: null } });
     throw new AppError('User not found', 404);
   }
 
@@ -190,7 +204,7 @@ async function purchaseCard(gameId, cardId, userId) {
       description: `Card #${card.cardNumber} in game ${game.gameCode}`,
     });
   } catch (err) {
-    await BingoCard.updateOne({ _id: cardId }, { $set: { status: CARD_STATUS.AVAILABLE, ownerId: null, purchasedAt: null } });
+    await BingoCard.updateOne({ _id: cardId }, { $set: { status: CARD_STATUS.AVAILABLE, ownerId: null, purchasedAt: null, lockedBy: null, lockedAt: null, lockExpiresAt: null } });
     throw err;
   }
 
