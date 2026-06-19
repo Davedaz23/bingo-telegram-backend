@@ -2,9 +2,10 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const logger = require('../utils/logger');
-const { ROLES, REGISTRATION_BONUS } = require('../config/constants');
+const { ROLES } = require('../config/constants');
 const { creditBalance } = require('../services/walletService');
 const { TRANSACTION_TYPE } = require('../config/constants');
+const { getWelcomeBonus } = require('../services/settingService');
 
 /**
  * Validate Telegram Mini App initData
@@ -108,10 +109,11 @@ const authenticateTelegram = async (req, res, next) => {
         logger.info(`New user registered: ${telegramUser.id} (${role})`);
 
         // Credit registration bonus
-        await creditBalance(user._id, REGISTRATION_BONUS, TRANSACTION_TYPE.DEPOSIT, {
+        const bonus = await getWelcomeBonus();
+        await creditBalance(user._id, bonus, TRANSACTION_TYPE.DEPOSIT, {
           description: 'Welcome bonus for new player',
         });
-        logger.info(`Welcome bonus of ${REGISTRATION_BONUS} Birr credited to user ${user._id}`);
+        logger.info(`Welcome bonus of ${bonus} Birr credited to user ${user._id}`);
       } else {
         // Update profile fields if changed
         user.username = telegramUser.username || user.username;

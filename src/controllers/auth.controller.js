@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const { validateTelegramInitData } = require('../middleware/telegramAuth');
 const { ROLES, TRANSACTION_TYPE, TRANSACTION_STATUS } = require('../config/constants');
+const { getWelcomeBonus } = require('../services/settingService');
 const logger = require('../utils/logger');
 
 /**
@@ -23,6 +24,8 @@ exports.telegramLogin = async (req, res) => {
 
   let user = await User.findOne({ telegramId: telegramUser.id.toString() });
   if (!user) {
+    const bonus = await getWelcomeBonus();
+
     user = await User.create({
       telegramId: telegramUser.id.toString(),
       username: telegramUser.username || null,
@@ -30,7 +33,7 @@ exports.telegramLogin = async (req, res) => {
       lastName: telegramUser.last_name || null,
       languageCode: telegramUser.language_code || 'en',
       role,
-      balance: 20,
+      balance: bonus,
     });
 
     await Transaction.create({
@@ -38,13 +41,13 @@ exports.telegramLogin = async (req, res) => {
       telegramId: user.telegramId,
       type: TRANSACTION_TYPE.DEPOSIT,
       status: TRANSACTION_STATUS.COMPLETED,
-      amount: 20,
+      amount: bonus,
       balanceBefore: 0,
-      balanceAfter: 20,
-      description: 'Welcome bonus: 20 Birr',
+      balanceAfter: bonus,
+      description: `Welcome bonus: ${bonus} Birr`,
     });
 
-    logger.info(`New user via auth: ${telegramUser.id} (${role}) — 20 Birr welcome bonus`);
+    logger.info(`New user via auth: ${telegramUser.id} (${role}) — ${bonus} Birr welcome bonus`);
   } else {
     if (!user.isActive) {
       return res.status(403).json({ success: false, message: 'Account suspended' });

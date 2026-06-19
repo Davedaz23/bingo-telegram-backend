@@ -14,6 +14,7 @@ const { processWithdrawal, rejectWithdrawal } = require('../services/withdrawalS
 const { creditBalance } = require('../services/walletService');
 const { GAME_STATUS, TRANSACTION_TYPE, WITHDRAWAL_STATUS, DEPOSIT_STATUS } = require('../config/constants');
 const { AppError } = require('../middleware/errorHandler');
+const { getWelcomeBonus, setWelcomeBonus } = require('../services/settingService');
 
 // ─── Game Management ──────────────────────────────────────────────────────────
 
@@ -158,6 +159,22 @@ exports.rejectWithdrawal = async (req, res) => {
   if (!reason) throw new AppError('Rejection reason required', 400);
   const withdrawal = await rejectWithdrawal(req.params.id, req.userId, reason);
   res.json({ success: true, message: 'Withdrawal rejected and refunded', withdrawal });
+};
+
+// ─── Settings Management ──────────────────────────────────────────────────
+
+exports.getWelcomeBonusSetting = async (req, res) => {
+  const amount = await getWelcomeBonus();
+  res.json({ success: true, welcomeBonus: amount });
+};
+
+exports.setWelcomeBonusSetting = async (req, res) => {
+  const { amount } = req.body;
+  if (amount === undefined || amount === null) {
+    throw new AppError('Amount is required', 400);
+  }
+  const value = await setWelcomeBonus(amount);
+  res.json({ success: true, welcomeBonus: value });
 };
 
 // ─── Dashboard Stats ──────────────────────────────────────────────────────────

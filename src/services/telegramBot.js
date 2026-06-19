@@ -3,10 +3,11 @@ const User = require('../models/User');
 const Game = require('../models/Game');
 const Transaction = require('../models/Transaction');
 const { getIO } = require('../socket/socketManager');
-const { ROLES, GAME_STATUS, REGISTRATION_BONUS } = require('../config/constants');
+const { ROLES, GAME_STATUS } = require('../config/constants');
 const logger = require('../utils/logger');
 const { creditBalance } = require('../services/walletService');
 const { TRANSACTION_TYPE } = require('../config/constants');
+const { getWelcomeBonus } = require('../services/settingService');
 
 let bot = null;
 const MINI_APP_URL = process.env.MINI_APP_URL || 'https://bingo-telegram-frontend.vercel.app';
@@ -119,10 +120,11 @@ async function ensureUser(telegramUser) {
     logger.info(`Bot: auto-registered user ${telegramUser.id}`);
 
     // Credit registration bonus
-    await creditBalance(user._id, REGISTRATION_BONUS, TRANSACTION_TYPE.DEPOSIT, {
+    const bonus = await getWelcomeBonus();
+    await creditBalance(user._id, bonus, TRANSACTION_TYPE.DEPOSIT, {
       description: 'Welcome bonus for new player',
     });
-    logger.info(`Welcome bonus of ${REGISTRATION_BONUS} Birr credited to user ${user._id}`);
+    logger.info(`Welcome bonus of ${bonus} Birr credited to user ${user._id}`);
   }
   return user;
 }
@@ -146,20 +148,21 @@ async function handleStart(msg) {
   await setUserCommands(chatId, user.role);
   const commands = getCommands(user.role);
 
-  const isNewUser = user.totalDeposited === 0 && user.balance === REGISTRATION_BONUS;
+  const bonus = await getWelcomeBonus();
+  const isNewUser = user.totalDeposited === 0 && user.balance === bonus;
 
   let welcomeText = `🎱 *Ato Bingo* — Welcome${isNewUser ? ' Back' : ''}!\n\n`;
   welcomeText += `👋 Hello *${user.firstName}*!\n`;
   welcomeText += `💰 Your Balance: *${user.balance.toFixed(2)} Birr*\n\n`;
 
   if (isNewUser) {
-    welcomeText += `🎉 *Welcome Bonus: +${REGISTRATION_BONUS} Birr!*\n`;
+    welcomeText += `🎉 *Welcome Bonus: +${bonus} Birr!*\n`;
     welcomeText += `Start playing and win real money!\n\n`;
   }
 
   welcomeText += `🎯 *How to Play:*\n`;
   welcomeText += `1. Tap "Play Bingo" to open the game\n`;
-  welcomeText += `2. Select your card(s) - ${REGISTRATION_BONUS} Birr = 2 cards free!\n`;
+  welcomeText += `2. Select your card(s) - ${bonus} Birr = ${Math.floor(bonus / 10)} cards free!\n`;
   welcomeText += `3. Wait for players to join (min 2)\n`;
   welcomeText += `4. Numbers drawn every 5 seconds\n`;
   welcomeText += `5. First BINGO wins the prize pool!\n\n`;
@@ -536,13 +539,14 @@ async function initTelegramBot() {
           break;
 
         case 'bonuses':
+          const bonusAmt = await getWelcomeBonus();
           await bot.sendMessage(chatId,
             `🎁 *Bonuses & Rewards*\n\n` +
-            `🎉 *Welcome Bonus:* ${REGISTRATION_BONUS} Birr (one-time)\n` +
+            `🎉 *Welcome Bonus:* ${bonusAmt} Birr (one-time)\n` +
             `💎 *Referral Bonus:* Coming soon!\n` +
             `🏆 *Daily Login:* Coming soon!\n` +
             `🎯 *Tournament Prizes:* Coming soon!\n\n` +
-            `Your welcome bonus: ${user.totalDeposited === REGISTRATION_BONUS ? '✅ Claimed' : '🎁 Ready to claim'}`,
+            `Your welcome bonus: ${user.totalDeposited === bonusAmt ? '✅ Claimed' : '🎁 Ready to claim'}`,
             { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
           );
           break;

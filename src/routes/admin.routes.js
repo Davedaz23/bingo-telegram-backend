@@ -29,6 +29,10 @@ router.get('/deposits', adminController.listDepositRequests);
 router.post('/deposits/:id/match', adminController.matchSmsDeposit);
 router.post('/deposits/:id/confirm', adminController.confirmDeposit);
 
+// Settings management
+router.get('/settings/welcome-bonus', adminController.getWelcomeBonusSetting);
+router.put('/settings/welcome-bonus', adminController.setWelcomeBonusSetting);
+
 // Withdrawal management
 router.get('/withdrawals', adminController.listWithdrawals);
 router.post('/withdrawals/:id/approve', adminController.approveWithdrawal);
