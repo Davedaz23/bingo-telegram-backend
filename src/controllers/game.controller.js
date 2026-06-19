@@ -73,9 +73,8 @@ exports.selectCard = async (req, res) => {
   const result = await selectCard(req.params.id, req.params.cardId, req.userId);
   res.json({
     success: true,
-    message: 'Card purchased successfully!',
+    message: 'Card locked',
     card: result.card,
-    prizePool: result.prizePool,
   });
 };
 
