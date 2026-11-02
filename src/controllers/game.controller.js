@@ -2,6 +2,8 @@ const Game = require('../models/Game');
 const BingoCard = require('../models/BingoCard');
 const {
   ensureSelectionGame,
+  getActiveArenaGame,
+  quickJoinArena,
   createGame,
   selectCard,
   releaseCard,
@@ -14,6 +16,29 @@ const {
 } = require('../services/gameService');
 const { GAME_STATUS } = require('../config/constants');
 const { AppError } = require('../middleware/errorHandler');
+
+/**
+ * GET /api/games/active - get direct 75-Ball Arena state & my cards
+ */
+exports.getActiveArena = async (req, res) => {
+  const arenaData = await getActiveArenaGame(req.userId);
+  res.json({ success: true, ...arenaData });
+};
+
+/**
+ * POST /api/games/quick-join - 1-tap join 75-Ball Arena
+ */
+exports.quickJoinArena = async (req, res) => {
+  const count = Math.min(Math.max(parseInt(req.body.count) || 1, 1), 4);
+  const result = await quickJoinArena(req.userId, count);
+  res.json({
+    success: true,
+    message: `Joined Arena with ${result.cards.length} card(s)!`,
+    game: result.game,
+    cards: result.cards,
+    prizePool: result.prizePool,
+  });
+};
 
 /**
  * GET /api/games - list open games

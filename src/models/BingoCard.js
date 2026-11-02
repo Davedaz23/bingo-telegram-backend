@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { CARD_STATUS } = require('../config/constants');
+const { CARD_STATUS, GAME_FORMAT } = require('../config/constants');
 
 const bingoCardSchema = new mongoose.Schema({
   gameId: {
@@ -9,16 +9,26 @@ const bingoCardSchema = new mongoose.Schema({
     index: true,
   },
 
-  cardNumber: { type: Number, required: true }, // card #1, #2, ... within game
-
-  // The 5x5 grid: { B: [n,n,n,n,n], I: [...], N: [...], G: [...], O: [...] }
-  card: {
-    B: [Number],
-    I: [Number],
-    N: [Number],
-    G: [Number],
-    O: [Number],
+  gameFormat: {
+    type: String,
+    enum: Object.values(GAME_FORMAT),
+    default: GAME_FORMAT.BALL_75,
   },
+
+  cardNumber: {
+    type: Number,
+    required: true,
+  },
+
+  // Structure for 75-ball: { B: [...], I: [...], N: [...], G: [...], O: [...] }
+  // Structure for 90-ball: { grid: [[...], [...], [...]] }
+  cardData: {
+    type: mongoose.Schema.Types.Mixed,
+    required: true,
+  },
+
+  // Flat list of all numbers on the card (excluding FREE space / 0) for quick search
+  allNumbers: [Number],
 
   status: {
     type: String,
@@ -28,42 +38,50 @@ const bingoCardSchema = new mongoose.Schema({
   },
 
   // Ownership
-  ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
   ownerTelegramId: { type: String, default: null },
 
-  // Optimistic locking: when a user "selects" this card, we lock it temporarily
+  // Reservation / Lock
   lockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   lockedAt: { type: Date, default: null },
   lockExpiresAt: { type: Date, default: null, index: true },
 
   purchasedAt: { type: Date, default: null },
 
-  // For winner verification
-  markedNumbers: [Number], // which numbers have been marked on this card
+  // Numbers marked on this card
+  markedNumbers: [Number],
 }, {
   timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
 });
 
-// Compound index for atomic selection
-bingoCardSchema.index({ gameId: 1, status: 1 });
+// Backward compatibility virtual for card field
+bingoCardSchema.virtual('card').get(function () {
+  return this.cardData;
+}).set(function (val) {
+  this.cardData = val;
+});
+
+// Compound indexes
 bingoCardSchema.index({ gameId: 1, cardNumber: 1 }, { unique: true });
-bingoCardSchema.index({ lockExpiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL on lockExpiry field
+bingoCardSchema.index({ gameId: 1, status: 1 });
+bingoCardSchema.index({ gameId: 1, ownerId: 1 });
 
 /**
- * Atomically try to lock a card for a user.
- * Returns true if lock succeeded, false if already locked/purchased.
+ * Atomically reserve / lock a card for a player
  */
 bingoCardSchema.statics.tryLock = async function (cardId, userId, ttlSeconds = 120) {
   const now = new Date();
   const lockExpiry = new Date(now.getTime() + ttlSeconds * 1000);
 
-  const result = await this.findOneAndUpdate(
+  return this.findOneAndUpdate(
     {
       _id: cardId,
       status: CARD_STATUS.AVAILABLE,
       $or: [
         { lockedBy: null },
-        { lockExpiresAt: { $lt: now } }, // expired lock
+        { lockExpiresAt: { $lt: now } },
       ],
     },
     {
@@ -76,16 +94,18 @@ bingoCardSchema.statics.tryLock = async function (cardId, userId, ttlSeconds = 1
     },
     { new: true }
   );
-
-  return result;
 };
 
 /**
- * Release an expired or abandoned lock, returning card to AVAILABLE
+ * Release a card lock back to available
  */
 bingoCardSchema.statics.releaseLock = async function (cardId, userId) {
   return this.findOneAndUpdate(
-    { _id: cardId, lockedBy: userId, status: CARD_STATUS.SELECTED },
+    {
+      _id: cardId,
+      lockedBy: userId,
+      status: CARD_STATUS.SELECTED,
+    },
     {
       $set: {
         status: CARD_STATUS.AVAILABLE,
@@ -99,11 +119,9 @@ bingoCardSchema.statics.releaseLock = async function (cardId, userId) {
 };
 
 /**
- * Confirm purchase: atomically move from SELECTED → PURCHASED
+ * Confirm purchase of a reserved card
  */
 bingoCardSchema.statics.confirmPurchase = async function (cardId, userId) {
-  const now = new Date();
-  // Allow purchase even if lock expired, as long as this user was the locker
   return this.findOneAndUpdate(
     {
       _id: cardId,
@@ -114,7 +132,7 @@ bingoCardSchema.statics.confirmPurchase = async function (cardId, userId) {
       $set: {
         status: CARD_STATUS.PURCHASED,
         ownerId: userId,
-        purchasedAt: now,
+        purchasedAt: new Date(),
         lockedBy: null,
         lockedAt: null,
         lockExpiresAt: null,

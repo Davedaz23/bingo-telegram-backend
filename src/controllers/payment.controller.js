@@ -38,14 +38,16 @@ exports.getTransactions = async (req, res) => {
 };
 
 exports.requestWithdrawal = async (req, res) => {
-  const { amount, accountNumber, bankName, phoneNumber, accountHolderName } = req.body;
-  if (!amount || isNaN(amount)) throw new AppError('Valid amount required', 400);
-  if (!accountNumber) throw new AppError('Account number required', 400);
+  const { amount, accountNumber, bankName, phoneNumber, accountHolderName, channel } = req.body;
+  if (!amount || isNaN(amount)) throw new AppError('Valid withdrawal amount required', 400);
+  const accountOrPhone = accountNumber || phoneNumber;
+  if (!accountOrPhone) throw new AppError('Account or phone number required', 400);
 
   const withdrawal = await requestWithdrawal(req.userId, parseFloat(amount), {
-    accountNumber,
+    channel: channel || 'telebirr',
+    accountNumber: accountOrPhone,
     bankName,
-    phoneNumber,
+    phoneNumber: phoneNumber || accountOrPhone,
     accountHolderName,
   });
 
@@ -103,4 +105,12 @@ exports.getDepositAccounts = async (req, res) => {
     accountName: process.env.DEPOSIT_ACCOUNT_NAME || 'Bingo Ethiopia PLC',
   };
   res.json({ success: true, accounts });
+};
+
+exports.getMyDeposits = async (req, res) => {
+  const DepositRequest = require('../models/DepositRequest');
+  const deposits = await DepositRequest.find({ userId: req.userId })
+    .sort({ createdAt: -1 })
+    .limit(30);
+  res.json({ success: true, deposits });
 };

@@ -7,6 +7,8 @@ router.use(authenticateTelegram);
 
 router.get('/', gameController.listGames);
 router.get('/history', gameController.getMyHistory);
+router.get('/active', gameController.getActiveArena);
+router.post('/quick-join', gameController.quickJoinArena);
 router.get('/:id', gameController.getGame);
 router.get('/:id/cards', gameController.getGameCards);
 router.post('/:id/cards/:cardId/select', gameController.selectCard);

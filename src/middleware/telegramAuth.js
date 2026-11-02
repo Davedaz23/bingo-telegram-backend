@@ -58,6 +58,7 @@ function validateTelegramInitData(initData) {
  * Sets req.user with the authenticated user document
  */
 const authenticateTelegram = async (req, res, next) => {
+  console.log('authenticateTelegram called for:', req.path, 'authHeader:', !!req.headers.authorization, 'initData:', !!req.headers['x-telegram-init-data']);
   try {
     // Support both Authorization header (JWT) and initData
     const authHeader = req.headers.authorization;
@@ -73,14 +74,18 @@ const authenticateTelegram = async (req, res, next) => {
         req.telegramId = decoded.telegramId;
         req.userId = decoded.userId;
         req.role = decoded.role;
+        console.log('Middleware JWT decoded:', JSON.stringify({ userId: decoded.userId, email: decoded.email, role: decoded.role }));
 
         const user = await User.findById(decoded.userId).select('-__v');
+        console.log('Middleware found user:', !!user, user?._id);
         if (!user || !user.isActive) {
           return res.status(401).json({ success: false, message: 'User not found or deactivated' });
         }
         req.user = user;
+        console.log('Middleware set req.userId to:', req.userId);
         return next();
-      } catch {
+      } catch (err) {
+        console.log('Middleware JWT error:', err.message);
         return res.status(401).json({ success: false, message: 'Invalid or expired token' });
       }
     }

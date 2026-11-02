@@ -1,20 +1,26 @@
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 require('dotenv').config();
 const http = require('http');
 const app = require('./app');
 const { initSocket } = require('./socket/socketManager');
 const connectDB = require('./config/database');
 const logger = require('./utils/logger');
+const { seedInitialData } = require('./services/seedService');
 const { startGameScheduler } = require('./services/gameScheduler');
 const { ensureSelectionGame, startGameSync } = require('./services/gameService');
 const { initTelegramBot } = require('./services/telegramBot');
 
-const PORT = process.env.PORT || 6000;
+const PORT = process.env.PORT || 5001;
 
 async function startServer() {
   try {
     // Connect to MongoDB
     await connectDB();
     logger.info('✅ MongoDB connected');
+
+    // Seed default achievements and settings
+    await seedInitialData();
 
     // Create HTTP server
     const server = http.createServer(app);

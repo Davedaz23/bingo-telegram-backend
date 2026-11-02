@@ -45,6 +45,9 @@ function initSocket(server) {
         'https://web.telegram.org',
         'https://telegram.org',
         'https://bingo-telegram-frontend.vercel.app',
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002',
       ],
       methods: ['GET', 'POST'],
       credentials: true,
@@ -180,7 +183,12 @@ function initSocket(server) {
 }
 
 function getIO() {
-  if (!io) throw new Error('Socket.IO not initialized');
+  if (!io) {
+    return {
+      to: () => ({ emit: () => {} }),
+      emit: () => {},
+    };
+  }
   return io;
 }
 

@@ -5,7 +5,8 @@ const BingoCard = require('../models/BingoCard');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const { creditBalance, debitBalance, calculatePrize } = require('./walletService');
-const { generateBingoCard, checkBingo, generateDrawSequence } = require('../utils/bingoUtils');
+const { generateBingoCard, checkBingo, generateDrawSequence, cardToGrid, checkOneAway } = require('../utils/bingoUtils');
+const { checkAndUnlockAchievements } = require('./achievementService');
 const { getIO } = require('../socket/socketManager');
 const { GAME_STATUS, CARD_STATUS, TRANSACTION_TYPE, GAME_CONFIG, CARD_LOCK_TTL_SECONDS } = require('../config/constants');
 const logger = require('../utils/logger');
@@ -42,6 +43,150 @@ async function ensureSelectionGame() {
   logger.info(`Auto-created selection game: ${game.gameCode} with ${GAME_CONFIG.CARDS_PER_GAME} cards`);
   getIO().emit('game:new', { gameId: game._id, gameCode: game.gameCode, cardPrice: game.cardPrice });
   return game;
+}
+
+/**
+ * Get or initialize the active 75-Ball Arena game
+ */
+async function getActiveArenaGame(userId) {
+  let game = await Game.findOne({
+    status: { $in: [GAME_STATUS.SELECTION, GAME_STATUS.STARTING, GAME_STATUS.ACTIVE] },
+  }).sort({ createdAt: -1 });
+
+  if (!game) {
+    game = await ensureSelectionGame();
+  }
+
+  // Get user's cards for this game
+  let myCards = [];
+  if (userId) {
+    const cards = await BingoCard.find({
+      gameId: game._id,
+      ownerId: userId,
+      status: CARD_STATUS.PURCHASED,
+    });
+    myCards = cards.map(c => ({
+      _id: c._id,
+      cardNumber: c.cardNumber,
+      card: c.card,
+      grid: cardToGrid(c.card),
+      markedNumbers: c.markedNumbers || [],
+      status: c.status,
+    }));
+  }
+
+  // Calculate remaining countdown seconds if starting/selection
+  let countdownRemaining = null;
+  if (game.countdownStartedAt) {
+    const elapsed = (Date.now() - new Date(game.countdownStartedAt).getTime()) / 1000;
+    const maxSec = game.status === GAME_STATUS.STARTING
+      ? GAME_CONFIG.START_COUNTDOWN_SECONDS
+      : GAME_CONFIG.SELECTION_COUNTDOWN_SECONDS;
+    countdownRemaining = Math.max(0, Math.ceil(maxSec - elapsed));
+  }
+
+  return {
+    game: {
+      _id: game._id,
+      gameCode: game.gameCode,
+      title: game.title || '75-Ball Arena',
+      description: game.description,
+      status: game.status,
+      gameFormat: game.gameFormat || '75_ball',
+      winPattern: game.winPattern || 'any_line',
+      cardCost: game.cardCost || game.cardPrice || 10,
+      prizePool: game.prizePool,
+      playerCount: game.players ? game.players.length : 0,
+      drawnNumbers: game.drawnNumbers || [],
+      currentDrawIndex: game.currentDrawIndex || 0,
+      drawIntervalMs: game.drawIntervalMs || GAME_CONFIG.NUMBER_DRAW_INTERVAL_MS,
+      countdownStartedAt: game.countdownStartedAt,
+      countdownRemaining,
+      winners: game.winners || [],
+    },
+    myCards,
+    isParticipant: myCards.length > 0,
+  };
+}
+
+/**
+ * 1-Tap Quick Join for the active arena
+ */
+async function quickJoinArena(userId, count = 1) {
+  const joinableStatuses = [GAME_STATUS.SELECTION, GAME_STATUS.REGISTRATION_OPEN, GAME_STATUS.WAITING];
+  let game = await Game.findOne({
+    status: { $in: joinableStatuses },
+  }).sort({ createdAt: -1 });
+
+  if (!game) {
+    const active = await Game.findOne({
+      status: { $in: [GAME_STATUS.STARTING, GAME_STATUS.ACTIVE] },
+    }).sort({ createdAt: -1 });
+
+    if (active) {
+      game = await Game.create({
+        gameCode: generateGameCode(),
+        title: '75-Ball Arena (Next Round)',
+        cardCost: GAME_CONFIG.CARD_PRICE,
+        cardPrice: GAME_CONFIG.CARD_PRICE,
+        platformFeePercent: GAME_CONFIG.PLATFORM_FEE_PERCENT,
+        winPattern: 'any_line',
+        gameFormat: '75_ball',
+        maxPlayers: GAME_CONFIG.MAX_PLAYERS,
+        minPlayers: GAME_CONFIG.MIN_PLAYERS,
+        drawIntervalMs: GAME_CONFIG.NUMBER_DRAW_INTERVAL_MS,
+        drawSequence: generateDrawSequence(75),
+        status: GAME_STATUS.SELECTION,
+      });
+      await generateCardsForGame(game._id, GAME_CONFIG.CARDS_PER_GAME);
+    } else {
+      game = await ensureSelectionGame();
+    }
+  }
+
+  // Find available card(s)
+  let availableCards = await BingoCard.find({
+    gameId: game._id,
+    status: CARD_STATUS.AVAILABLE,
+  })
+    .sort({ cardNumber: 1 })
+    .limit(count);
+
+  if (availableCards.length < count) {
+    // Generate cards if they were missing
+    await generateCardsForGame(game._id, GAME_CONFIG.CARDS_PER_GAME);
+    availableCards = await BingoCard.find({
+      gameId: game._id,
+      status: CARD_STATUS.AVAILABLE,
+    })
+      .sort({ cardNumber: 1 })
+      .limit(count);
+  }
+
+  if (availableCards.length < count) {
+    throw new AppError('No available cards remaining in this arena round', 400);
+  }
+
+  const purchasedCards = [];
+  for (const c of availableCards) {
+    const res = await purchaseCard(game._id, c._id, userId);
+    purchasedCards.push({
+      _id: res.card._id,
+      cardNumber: res.card.cardNumber,
+      card: res.card.card,
+      grid: cardToGrid(res.card.card),
+      markedNumbers: [],
+      status: res.card.status,
+    });
+  }
+
+  const updatedGame = await Game.findById(game._id);
+
+  return {
+    game: updatedGame,
+    cards: purchasedCards,
+    prizePool: updatedGame.prizePool,
+  };
 }
 
 async function createGame(adminUserId, options = {}) {
@@ -93,7 +238,8 @@ async function ensureNextGameOnFinish(finishedGameId) {
 async function selectCard(gameId, cardId, userId) {
   const game = await Game.findById(gameId);
   if (!game) throw new AppError('Game not found', 404);
-  if (game.status !== GAME_STATUS.SELECTION) {
+  const joinableStatuses = [GAME_STATUS.SELECTION, GAME_STATUS.REGISTRATION_OPEN, GAME_STATUS.WAITING];
+  if (!joinableStatuses.includes(game.status)) {
     throw new AppError('Game is not accepting new players', 400);
   }
 
@@ -119,7 +265,8 @@ async function releaseCard(cardId, userId) {
 
   if (card.status === CARD_STATUS.PURCHASED && card.ownerId?.toString() === userId.toString()) {
     const game = await Game.findById(card.gameId);
-    if (!game || game.status !== GAME_STATUS.SELECTION) {
+    const joinableStatuses = [GAME_STATUS.SELECTION, GAME_STATUS.REGISTRATION_OPEN, GAME_STATUS.WAITING];
+    if (!game || !joinableStatuses.includes(game.status)) {
       throw new AppError('Can only refund cards during selection phase', 400);
     }
 
@@ -161,7 +308,8 @@ async function releaseCard(cardId, userId) {
 async function purchaseCard(gameId, cardId, userId) {
   let game = await Game.findById(gameId);
   if (!game) throw new AppError('Game not found', 404);
-  if (game.status !== GAME_STATUS.SELECTION) {
+  const joinableStatuses = [GAME_STATUS.SELECTION, GAME_STATUS.REGISTRATION_OPEN, GAME_STATUS.WAITING];
+  if (!joinableStatuses.includes(game.status)) {
     throw new AppError('Game is not accepting new players', 400);
   }
 
@@ -210,6 +358,23 @@ async function purchaseCard(gameId, cardId, userId) {
 
   await BingoCard.updateOne({ _id: cardId }, { ownerTelegramId: user.telegramId });
 
+  // Update user gaming statistics and daily quest counter
+  const today = new Date().toISOString().slice(0, 10);
+  const isToday = user.lastGamePlayedDate === today;
+  await User.updateOne(
+    { _id: userId },
+    {
+      $inc: {
+        gamesPlayed: 1,
+        dailyGamesPlayed: isToday ? 1 : 0,
+      },
+      $set: {
+        lastGamePlayedDate: today,
+        ...(!isToday ? { dailyGamesPlayed: 1 } : {}),
+      },
+    }
+  );
+
   await Game.updateOne(
     { _id: gameId },
     {
@@ -219,6 +384,7 @@ async function purchaseCard(gameId, cardId, userId) {
           userId,
           telegramId: user.telegramId,
           cardId,
+          cardIds: [cardId],
           joinedAt: new Date(),
         },
       },
@@ -393,7 +559,11 @@ async function claimBingo(gameId, userId) {
     const player = game.players.find(p => p.userId.toString() === userId.toString());
     if (!player) throw new AppError('You are not in this game', 400);
 
-    const card = await BingoCard.findById(player.cardId);
+    const targetCardId = player.cardId || (player.cardIds && player.cardIds[0]);
+    let card = targetCardId ? await BingoCard.findById(targetCardId) : null;
+    if (!card) {
+      card = await BingoCard.findOne({ gameId, ownerId: userId, status: CARD_STATUS.PURCHASED });
+    }
     if (!card) throw new AppError('Card not found', 404);
 
     const bingoResult = checkBingo(card.card, game.drawnNumbers, game.winPattern);
@@ -414,29 +584,38 @@ async function claimBingo(gameId, userId) {
     }, session);
 
     const user = await User.findById(userId).session(session);
+
+    const winnerData = {
+      userId,
+      telegramId: user.telegramId,
+      username: user.username,
+      firstName: user.firstName,
+      cardId: targetCardId || card._id,
+      winningNumber,
+      prizePoints: winnerPrize,
+      claimedAt: new Date(),
+      patternAchieved: bingoResult.type,
+      winningLine: { type: bingoResult.type, index: bingoResult.index },
+    };
+
     await Game.updateOne(
       { _id: gameId },
       {
         status: GAME_STATUS.FINISHED,
         platformFeeCollected: platformFee,
         endedAt: new Date(),
-        winner: {
-          userId,
-          telegramId: user.telegramId,
-          cardId: player.cardId,
-          winningNumber,
-          prizeAmount: winnerPrize,
-          claimedAt: new Date(),
-          winningLine: { type: bingoResult.type, index: bingoResult.index },
-        },
+        winners: [winnerData],
       },
       { session }
     );
 
-    await User.updateOne(
-      { _id: userId },
-      { $inc: { gamesWon: 1 } },
-      { session }
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $inc: { gamesWon: 1, totalPointsWon: winnerPrize },
+        $max: { highestWin: winnerPrize },
+      },
+      { new: true, session }
     );
 
     const playerUserIds = game.players.map(p => p.userId);
@@ -447,6 +626,11 @@ async function claimBingo(gameId, userId) {
     );
 
     await session.commitTransaction();
+
+    checkAndUnlockAchievements(userId, 'games_won', updatedUser ? updatedUser.gamesWon : 1).catch(err => logger.error('Achievement error:', err));
+    if (updatedUser?.totalPointsWon) {
+      checkAndUnlockAchievements(userId, 'total_points_won', updatedUser.totalPointsWon).catch(err => logger.error('Achievement error:', err));
+    }
 
     getIO().to(`game:${gameId}`).emit('game:winner', {
       gameId,
@@ -672,6 +856,8 @@ async function removeUserFromGame(gameId, userId, adminId = null) {
 
 module.exports = {
   ensureSelectionGame,
+  getActiveArenaGame,
+  quickJoinArena,
   createGame,
   ensureNextGameOnFinish,
   selectCard,

@@ -9,7 +9,12 @@ const {
   startGameCountdown,
   cancelAndRefund,
 } = require('../services/gameService');
-const { matchAndConfirmDeposit, adminConfirmDeposit } = require('../services/paymentService');
+const {
+  matchAndConfirmDeposit,
+  adminConfirmDeposit,
+  autoMatchSmsDeposit,
+  rejectDeposit,
+} = require('../services/paymentService');
 const { processWithdrawal, rejectWithdrawal } = require('../services/withdrawalService');
 const { creditBalance } = require('../services/walletService');
 const { GAME_STATUS, TRANSACTION_TYPE, WITHDRAWAL_STATUS, DEPOSIT_STATUS } = require('../config/constants');
@@ -158,6 +163,20 @@ exports.confirmDeposit = async (req, res) => {
   res.json({ success: true, ...result });
 };
 
+exports.autoMatchDeposit = async (req, res) => {
+  const { adminSmsText } = req.body;
+  if (!adminSmsText) throw new AppError('Admin SMS text required', 400);
+
+  const result = await autoMatchSmsDeposit(adminSmsText, req.userId);
+  res.json({ success: true, message: 'Deposit successfully matched and credited!', ...result });
+};
+
+exports.rejectDeposit = async (req, res) => {
+  const { reason } = req.body;
+  const result = await rejectDeposit(req.params.id, req.userId, reason || 'Transaction not verified');
+  res.json({ success: true, message: 'Deposit rejected', ...result });
+};
+
 // ─── Withdrawal Management ────────────────────────────────────────────────────
 
 exports.listWithdrawals = async (req, res) => {
@@ -173,7 +192,8 @@ exports.listWithdrawals = async (req, res) => {
 };
 
 exports.approveWithdrawal = async (req, res) => {
-  const withdrawal = await processWithdrawal(req.params.id, req.userId);
+  const { paymentReference } = req.body || {};
+  const withdrawal = await processWithdrawal(req.params.id, req.userId, paymentReference);
   res.json({ success: true, message: 'Withdrawal approved and processed', withdrawal });
 };
 

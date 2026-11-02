@@ -14,6 +14,7 @@ const withdrawalSchema = new mongoose.Schema({
   amount: { type: Number, required: true, min: 1 },
 
   // Destination
+  channel: { type: String, default: 'telebirr' },
   accountNumber: { type: String, required: true },
   bankName: { type: String },
   phoneNumber: { type: String },

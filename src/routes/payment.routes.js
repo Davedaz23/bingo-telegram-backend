@@ -7,7 +7,10 @@ router.use(authenticateTelegram);
 
 router.get('/balance', paymentController.getBalance);
 router.post('/deposit', paymentController.initiateDeposit);
+router.get('/deposits', paymentController.getMyDeposits);
 router.get('/deposit/accounts', paymentController.getDepositAccounts);
+router.get('/withdrawals', paymentController.getMyWithdrawals);
+router.post('/withdraw', paymentController.requestWithdrawal);
 router.get('/transactions', paymentController.getTransactions);
 router.post('/transfer', paymentController.transfer);
 

@@ -26,8 +26,10 @@ router.post('/games/:gameId/players/:userId/remove', adminController.removePlaye
 
 // Deposit management (SMS)
 router.get('/deposits', adminController.listDepositRequests);
+router.post('/deposits/auto-match', adminController.autoMatchDeposit);
 router.post('/deposits/:id/match', adminController.matchSmsDeposit);
 router.post('/deposits/:id/confirm', adminController.confirmDeposit);
+router.post('/deposits/:id/reject', adminController.rejectDeposit);
 
 // Settings management
 router.get('/settings/welcome-bonus', adminController.getWelcomeBonusSetting);
